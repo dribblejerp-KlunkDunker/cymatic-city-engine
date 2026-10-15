@@ -284,3 +284,32 @@ test('bad input is rejected with a clear message', () => {
   assert.throws(() => generateCity({ gravity: NaN }), /Gravity must be a number/);
   assert.throws(() => generateCity({ fundamentalHz: -40 }), /above 0/);
 });
+
+test('custom presets and custom materials: overrides apply, ranges clamp, profiles round-trip', () => {
+  const spec = { base: 'town', label: 'Elven haven', radius: 1200, floorsMax: 12, coreFloors: 40, floorH: 4.5, streetSpacing: 60, style: 'alien' };
+  const L = generateCity({ preset: spec, frequency: 300, material: { label: 'Living wood', sigma: 40e6, rho: 600 } });
+  assert.equal(L.meta.presetLabel, 'Elven haven');
+  assert.equal(L.meta.materialLabel, 'Living wood');
+  assert.equal(L.meta.presetSpec.floorH, 4.5);
+  assert.equal(L.meta.world.extent, 1200);
+  assert.ok(L.stats.heightLimit > 2000, 'light strong wood allows very tall halls');
+  assert.throws(() => generateCity({ preset: { base: 'nowhere' } }), /Unknown base preset/);
+  assert.throws(() => generateCity({ material: { sigma: -1, rho: 100 } }), /custom material/);
+  // the same spec passed as preset:'custom' + custom:{...} gives the identical city
+  const M = generateCity({ preset: 'custom', custom: spec, frequency: 300, material: { label: 'Living wood', sigma: 40e6, rho: 600 } });
+  assert.equal(toJSON(L), toJSON(M));
+});
+
+test('fantasy mode (enforce: false) keeps the pattern heights and reports the limits honestly', () => {
+  const real = generateCity({ preset: 'city', frequency: 432, gravity: 3 });
+  const fantasy = generateCity({ preset: 'city', frequency: 432, gravity: 3, enforce: false });
+  assert.ok(real.stats.binding.slenderness > 0 && real.stats.binding.core > 0, 'heavy gravity caps real towers');
+  assert.equal(fantasy.stats.binding.material + fantasy.stats.binding.slenderness + fantasy.stats.binding.core, 0);
+  assert.ok(fantasy.stats.maxHeight > real.stats.maxHeight);
+  assert.equal(fantasy.stats.heightLimit, real.stats.heightLimit, 'the real limit is still reported');
+  assert.equal(fantasy.checks.find((c) => c.id === 'slenderness').status, 'fail');
+  assert.equal(fantasy.checks.find((c) => c.id === 'enforce').status, 'warn');
+  assert.ok(!real.checks.some((c) => c.id === 'enforce'));
+  // fantasy cities still obey the non-negotiable geometry: no overlaps, roads clear
+  assert.equal(fantasy.checks.find((c) => c.id === 'setback').status, 'pass');
+});

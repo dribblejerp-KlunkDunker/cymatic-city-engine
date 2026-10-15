@@ -237,3 +237,19 @@ test('infrastructure for a city builds in under 3 s', () => {
   const t = Date.now(); buildInfrastructure(L);
   assert.ok(Date.now() - t < 3000, `${Date.now() - t} ms`);
 });
+
+test('force mains appear where a single run cannot stay above the depth limit (low gravity)', () => {
+  const L = full({ plate: 'sphere', preset: 'megastructure', frequency: 432, gravity: 0.165 });
+  const fm = L.infra.sewer.pipes.filter((p) => p.forceMain);
+  assert.ok(fm.length >= 1, 'at least one force main');
+  for (const p of fm) { assert.ok(p.lift); assert.equal(p.slope, 0); assert.equal(p.upDepth, SEWER.minCover); assert.equal(p.downDepth, SEWER.minCover); }
+  assert.ok(L.infra.sewer.pipes.every((p) => p.downDepth <= SEWER.maxDepth + 1e-6));
+  assert.equal(L.infra.checks.find((c) => c.id === 'sewer-depth').status, 'pass');
+});
+
+test('infrastructure also serves custom and fantasy-mode cities', () => {
+  const L = generateCity({ preset: { base: 'city', label: 'Sky citadel', floorsMax: 60, coreFloors: 300 }, frequency: 432, enforce: false, material: { label: 'Mithril', sigma: 900e6, rho: 3000 } });
+  L.infra = buildInfrastructure(L);
+  assert.equal(L.infra.laterals.length, L.buildings.length);
+  for (const c of L.infra.checks) assert.notEqual(c.status, 'fail', `${c.id}: ${c.value}`);
+});

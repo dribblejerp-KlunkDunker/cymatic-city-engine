@@ -131,6 +131,8 @@ details > div { display: grid; gap: 12px; padding-top: 8px; }
 .about p { margin: 0; font-size: var(--step--1); color: var(--ink-dim); max-width: 62ch; }
 .about p b { color: var(--ink); font-weight: 600; }
 #status { min-height: 1.2em; }
+input.text, textarea { width: 100%; box-sizing: border-box; background: var(--plate-2); color: var(--ink); border: 1px solid var(--rule); border-radius: 8px; padding: 6px 8px; font: 400 var(--step-0)/1.3 var(--body); }
+textarea { font: 400 var(--step--1)/1.3 var(--mono); resize: vertical; }
 
 .viewbar {
   position: absolute; left: calc(16px + env(safe-area-inset-left, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px));
@@ -202,7 +204,7 @@ details > div { display: grid; gap: 12px; padding-top: 8px; }
         <button id="tone" aria-pressed="false" title="Play the drive tone">Tone</button>
       </div>
       <div class="seg" role="group" aria-label="Settlement type" id="preset-seg">
-        <button data-v="town">Town</button><button data-v="city">City</button><button data-v="megastructure">Mega</button><button data-v="alien">Alien</button>
+        <button data-v="town">Town</button><button data-v="city">City</button><button data-v="megastructure">Mega</button><button data-v="alien">Alien</button><button data-v="custom">Custom</button>
       </div>
     </div>
 
@@ -229,6 +231,44 @@ details > div { display: grid; gap: 12px; padding-top: 8px; }
         </div>
         <label class="check" for="inverse"><input type="checkbox" id="inverse">
           <span>Build on the sand lines instead of the antinodes (tallest buildings line the boulevards, lobe centres become plazas)</span></label>
+      </section>
+
+      <section id="custom-section" hidden>
+        <h2>Custom settlement</h2>
+        <div class="pair">
+          <label class="field" for="custom-base">Start from
+            <select id="custom-base"><option value="town">Town</option><option value="city" selected>City</option><option value="megastructure">Megastructure</option><option value="alien">Alien city</option></select>
+          </label>
+          <label class="field" for="custom-style">Look
+            <select id="custom-style"><option value="">Same as base</option><option value="town">Town</option><option value="city">City</option><option value="mega">Megastructure</option><option value="alien">Alien</option></select>
+          </label>
+        </div>
+        <label class="field" for="custom-label">Name<input type="text" id="custom-label" class="text" placeholder="e.g. Elven haven"></label>
+        <div class="pair" id="custom-fields"></div>
+        <label class="check" for="custom-arcology"><input type="checkbox" id="custom-arcology"><span>One continuous terraced structure (arcology) instead of separate buildings</span></label>
+        <h2>Custom material</h2>
+        <div class="pair">
+          <label class="field" for="mat-sigma">Compressive strength (MPa)<input type="number" id="mat-sigma" min="0.1" step="1" placeholder="preset material"></label>
+          <label class="field" for="mat-rho">Density (kg/m³)<input type="number" id="mat-rho" min="1" step="10" placeholder="preset material"></label>
+        </div>
+        <label class="field" for="mat-label">Material name<input type="text" id="mat-label" class="text" placeholder="e.g. Living wood"></label>
+        <p class="hint">Concrete is about 80 MPa at 2,500 kg/m³; granite 100 MPa at 2,700; steel 250 MPa at 7,850; strong timber 40 MPa at 600. The self-weight limit is σ ÷ (ρ · g · 3).</p>
+      </section>
+
+      <section>
+        <h2>Setting</h2>
+        <div class="pair">
+          <label class="field" for="theme">Theme
+            <select id="theme"></select>
+          </label>
+          <label class="check" for="enforce" style="align-self:end"><input type="checkbox" id="enforce" checked><span>Realism: enforce material and slenderness limits</span></label>
+        </div>
+        <p class="hint">With realism off, buildings keep the heights the pattern asks for and the checks report what real materials would allow. A theme changes names and colours only; the engineering underneath is the same.</p>
+        <div class="actions">
+          <button id="profile-copy">Copy profile</button>
+          <button id="profile-apply">Apply pasted profile</button>
+        </div>
+        <textarea id="profile-text" rows="3" placeholder="Paste a profile JSON here and press Apply"></textarea>
       </section>
 
       <section>
@@ -325,7 +365,8 @@ import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/exampl
 // ------------------------------------------------------------ state
 const $ = (id) => document.getElementById(id);
 const DEFAULTS = { frequency: 432, plate: "circle", preset: "city", seed: 1, Q: 100, inverse: false,
-  gravity: null, material: null, fundamentalHz: null, driveOffset: null, azimuthal: null };
+  gravity: null, material: null, fundamentalHz: null, driveOffset: null, azimuthal: null,
+  enforce: true, theme: "realistic", custom: { base: "city" }, customMaterial: null };
 let params = { ...DEFAULTS };
 try { const s = JSON.parse(localStorage.getItem("cymatic-city-params-v2") || "null"); if (s) params = { ...DEFAULTS, ...s }; } catch {}
 const remember = () => { try { localStorage.setItem("cymatic-city-params-v2", JSON.stringify(params)); } catch {} };
@@ -337,8 +378,60 @@ const engineParams = () => {
   if (params.fundamentalHz != null) o.fundamentalHz = params.fundamentalHz;
   if (params.driveOffset != null) o.driveOffset = params.driveOffset;
   if (params.azimuthal != null) o.azimuthal = params.azimuthal;
+  if (params.preset === "custom") o.custom = { ...params.custom };
+  if (params.customMaterial) o.material = params.customMaterial;
+  o.enforce = params.enforce !== false;
   return o;
 };
+// a profile is everything needed to reproduce a city, plus the theme
+const profileOf = () => ({ engine: ENGINE_VERSION, ...engineParams(), theme: params.theme });
+function applyProfile(p) {
+  if (!p || typeof p !== "object") throw new Error("Not a profile");
+  const n = { ...DEFAULTS, custom: { base: "city" } };
+  for (const k of ["frequency", "plate", "preset", "seed", "Q", "inverse", "gravity", "fundamentalHz", "driveOffset", "azimuthal", "enforce", "theme"]) if (p[k] != null) n[k] = p[k];
+  if (p.preset && typeof p.preset === "object") { n.custom = { ...p.preset }; n.preset = "custom"; }
+  if (p.custom) n.custom = { ...p.custom };
+  if (p.material && typeof p.material === "object") n.customMaterial = { ...p.material }; else if (typeof p.material === "string") n.material = p.material;
+  if (!PLATES[n.plate]) throw new Error(`Unknown plate ${n.plate}`);
+  if (n.preset !== "custom" && !PRESETS[n.preset]) throw new Error(`Unknown preset ${n.preset}`);
+  if (!THEMES[n.theme]) n.theme = "realistic";
+  params = n; applyTheme(); regenerate(0);
+}
+
+// ------------------------------------------------------------ themes: names and colours only
+const THEMES = {
+  realistic: { label: "Realistic", names: {} },
+  fantasy: { label: "High fantasy", names: {
+    water: "Aqueducts", sewer: "Undercroft drains", power: "Ley lines", transmission: "Ley conduits", transit: "Deep roads", utilidor: "Dwarven galleries", lateral: "Household channels",
+    tower: "Cistern tower", waterplant: "Spring house", treatment: "Purification pools", lift: "Drain wheel", manhole: "Grate", plant: "Ley nexus", substation: "Ley node", station: "Deep gate",
+    building: "Hall", core: "Spire quarter", mixed: "Market quarter", residential: "Dwellings", green: "Groves" },
+    colors: { water: "#5bc8c0", sewer: "#8f7a4e", power: "#c6a1ff", transmission: "#ff8fd0", transit: "#b9a98a", utilidor: "#d9c28f" },
+    palette: { pos: ["#8c7a52", "#efe0b4"], neg: ["#5e7a6a", "#c9e2d0"], roofPos: "#7a3f2e", roofNeg: "#3e5b4a", tree: "#4d8a4a" } },
+  hive: { label: "Alien hive", names: {
+    water: "Nutrient veins", sewer: "Waste ducts", power: "Bioelectric lines", transmission: "Pulse arteries", transit: "Burrow ways", utilidor: "Carapace galleries", lateral: "Cell feeds",
+    tower: "Fluid sac", waterplant: "Filtration organ", treatment: "Digestion pit", lift: "Peristaltic pump", manhole: "Pore", plant: "Heart chamber", substation: "Ganglion", station: "Burrow mouth",
+    building: "Cell", core: "Brood core", mixed: "Workers' combs", residential: "Resting cells", green: "Fungal fields" },
+    colors: { water: "#7ff0d6", sewer: "#b08a5a", power: "#e7a7f3", transmission: "#ff6f91", transit: "#9ad4c4", utilidor: "#cdb6ff" },
+    palette: { pos: ["#6e3f86", "#e7a7f3"], neg: ["#1c6d68", "#7ff0d6"], tree: "#33d6b6" } },
+  solarpunk: { label: "Solarpunk", names: {
+    water: "Water mains", sewer: "Greywater returns", power: "Solar grid", transmission: "Grid trunks", transit: "Tram tunnels", utilidor: "Service galleries", lateral: "Service lines",
+    tower: "Rain tower", waterplant: "Wetland works", treatment: "Living machine", lift: "Lift station", manhole: "Access shaft", plant: "Solar farm hub", substation: "Microgrid node", station: "Tram stop",
+    building: "Building", core: "Civic core", mixed: "Mixed use", residential: "Co-housing", green: "Food forest" },
+    colors: { water: "#3fa7e0", sewer: "#8fa36a", power: "#ffd166", transmission: "#ff9f43", transit: "#8ecae6", utilidor: "#d7cbb0" },
+    palette: { pos: ["#9a8f5a", "#f1e7b8"], neg: ["#4f8a7a", "#cfe8df"], roofPos: "#6b8e4e", roofNeg: "#3f6f5e", tree: "#58a05a" } },
+};
+const NET_BASE = {};
+const themeName = (kind, fallback) => THEMES[params.theme]?.names[kind] ?? fallback;
+function applyTheme() {
+  const t = THEMES[params.theme] ?? THEMES.realistic;
+  for (const k of Object.keys(NET)) { NET_BASE[k] ??= { ...NET[k] }; NET[k].color = t.colors?.[k] ?? NET_BASE[k].color; NET[k].label = t.names[k] ?? NET_BASE[k].label; }
+  for (const chip of $("layer-chips").children) {
+    const key = chip.dataset.layer, base = LAYERS.find((l) => l[0] === key);
+    const label = { water: NET.water.label, sewer: NET.sewer.label, power: NET.power.label, transit: NET.transit.label, utilidor: NET.utilidor.label, laterals: NET.lateral.label, buildings: t.names.building ? `${t.names.building}s` : "Buildings", roads: base[1] }[key];
+    chip.lastChild.textContent = label; chip.style.setProperty("--c", key === "buildings" || key === "roads" ? base[2] : NET[{ laterals: "lateral" }[key] ?? key].color);
+  }
+  $("theme").value = params.theme;
+}
 
 // ------------------------------------------------------------ generation (worker when allowed)
 let worker = null, jobId = 0, pendingTimer = 0, layout = null, lastFrameKey = "";
@@ -508,8 +601,8 @@ function show(L) {
   const F = fieldPreview({ frequency: m0.frequency, plate: m0.plate, preset: m0.preset, Q: m0.Q, fundamentalHz: m0.fundamentalHz,
     driveOffset: m0.driveOffset, azimuthal: m0.azimuthal, gravity: m0.gravity, material: m0.material });
   disposeWorld();
-  const style = PRESETS[L.meta.preset].style;
-  const pal = PALETTES[style];
+  const style = L.meta.presetSpec?.style ?? PRESETS[L.meta.preset]?.style ?? "city";
+  const pal = { ...PALETTES[style], ...(THEMES[params.theme]?.palette ?? {}) };
   const sphere = F.kind === "sphere";
 
   // ground: the plate itself, sand-lit where it stands still
@@ -599,7 +692,7 @@ function show(L) {
   // trees
   if (L.trees.length) {
     const tr = new THREE.InstancedMesh(unitTree, mkMat({ color: pal.tree, roughness: 0.9, flatShading: true, emissive: style === "alien" ? "#06302a" : "#000000" }), L.trees.length);
-    const base = PRESETS[L.meta.preset].lot * 0.22;
+    const base = (L.meta.presetSpec?.lot ?? PRESETS[L.meta.preset].lot) * 0.22;
     const any = [1, 0, 0];
     L.trees.forEach((t, j) => {
       const f = norm3(cross(t.up, Math.abs(t.up[0]) < 0.9 ? any : [0, 0, 1]));
@@ -612,7 +705,7 @@ function show(L) {
   showNetworks(L);
 
   // frame the camera when the plate or scale changed
-  const frameKey = `${L.meta.plate}|${L.meta.preset}`;
+  const frameKey = `${L.meta.plate}|${L.meta.preset}|${Math.round(F.extent)}`;
   if (frameKey !== lastFrameKey) {
     lastFrameKey = frameKey;
     const E = F.extent + (sphere ? 0.5 : 0.45) * L.stats.maxHeight;
@@ -673,7 +766,7 @@ function showNetworks(L) {
     });
     add(layer, mesh, kind, records);
   };
-  const lot = PRESETS[L.meta.preset].lot;
+  const lot = L.meta.presetSpec?.lot ?? PRESETS[L.meta.preset].lot;
   struct("sewer", "treatment", I.sewer.plants, unitBox, "#7a6a3e", (p) => [lot * 2.2, 6, lot * 1.6]);
   struct("sewer", "lift", I.sewer.liftStations, unitDisc, "#c9a45c", (l) => [3.5, l.fromDepth, 3.5], (l) => l.fromDepth);
   struct("sewer", "manhole", I.sewer.manholes.length < 25000 ? I.sewer.manholes : [], unitDisc, "#6f6250", (m) => [1.2, m.depth, 1.2], (m) => m.depth);
@@ -787,7 +880,7 @@ function updatePanel(L) {
   ];
   $("stats").replaceChildren(...stats.map(([k, v]) => { const d = document.createElement("div"); d.className = "stat"; const a = document.createElement("span"); a.textContent = k; const b = document.createElement("b"); b.textContent = v; d.append(a, b); return d; }));
 
-  const style = PRESETS[m.preset].style, pal = PALETTES[style];
+  const style = m.presetSpec?.style ?? PRESETS[m.preset]?.style ?? "city", pal = { ...PALETTES[style], ...(THEMES[params.theme]?.palette ?? {}) };
   const legend = [[pal.pos[1], "+ phase districts"], [pal.neg[1], "− phase districts"], ["#efe2c2", "Nodal boulevards"], ["#ffd27a", "District landmarks"]];
   $("legend").replaceChildren(...legend.map(([c, t]) => { const sp = document.createElement("span"); const i = document.createElement("i"); i.style.background = c; sp.append(i, document.createTextNode(t)); return sp; }));
 
@@ -818,7 +911,7 @@ function updatePanel(L) {
       li.append(pill, label, val, basis); return li;
     }));
   }
-  const mat = MATERIALS[m.material];
+  const mat = m.materialSpec ?? MATERIALS[m.material];
   $("limits").textContent = `${mat.label}: self-weight limit ${Math.round(s.heightLimit)} m at ${m.gravity} g; slenderness up to 1:${Number.isFinite(s.slendernessLimit) ? s.slendernessLimit.toFixed(1) : "—"}. ` +
     `Capped: ${s.binding.slenderness} by slenderness, ${s.binding.core} by lift-core width, ${s.binding.material} by material.` +
     (mat.speculative ? " This material is speculative." : "");
@@ -837,7 +930,16 @@ function syncControls() {
   for (const b2 of $("preset-seg").children) b2.setAttribute("aria-pressed", b2.dataset.v === params.preset);
   for (const b2 of $("plate-seg").children) b2.setAttribute("aria-pressed", b2.dataset.v === params.plate);
   $("seed").value = params.seed; $("q").value = params.Q; $("inverse").checked = params.inverse;
-  const pr = PRESETS[params.preset];
+  const pr = params.preset === "custom" ? customPreset(params.custom) : PRESETS[params.preset];
+  $("custom-section").hidden = params.preset !== "custom";
+  if (params.preset === "custom") {
+    const c = params.custom, basePr = PRESETS[c.base ?? "city"];
+    $("custom-base").value = c.base ?? "city"; $("custom-style").value = c.style ?? ""; $("custom-label").value = c.label ?? ""; $("custom-arcology").checked = c.arcology ?? !!basePr.arcology;
+    for (const k of Object.keys(CUSTOM_FIELDS)) { const el = $(`custom-${k}`); if (el) { el.value = c[k] ?? ""; el.placeholder = k === "floorsMin" ? (basePr.floors?.[0] ?? "") : k === "floorsMax" ? (basePr.floors?.[1] ?? "") : (basePr[k] ?? ""); } }
+    const cm = params.customMaterial, editing = ["mat-sigma", "mat-rho", "mat-label"].includes(document.activeElement?.id);
+    if (cm && !editing) { $("mat-sigma").value = cm.sigma / 1e6; $("mat-rho").value = cm.rho; $("mat-label").value = cm.label; } // partial entries are left alone
+  }
+  $("enforce").checked = params.enforce !== false;
   $("gravity").placeholder = pr.gravity; $("gravity").value = params.gravity ?? "";
   $("fund").placeholder = PLATES[params.plate].defaultFundamental; $("fund").value = params.fundamentalHz ?? "";
   $("drive").placeholder = params.plate === "square" ? 0 : 0.37; $("drive").value = params.driveOffset ?? "";
@@ -848,22 +950,55 @@ function syncControls() {
     sel.append(new Option("Preset default", ""));
     for (const [k, v] of Object.entries(MATERIALS)) sel.append(new Option(v.label, k));
   }
-  sel.options[0].text = `Preset default (${MATERIALS[pr.material].label})`;
-  sel.value = params.material ?? "";
+  sel.options[0].text = params.customMaterial ? `Custom (${params.customMaterial.label})` : `Preset default (${MATERIALS[pr.material]?.label ?? pr.material})`;
+  sel.value = params.customMaterial ? "" : params.material ?? "";
   $("hud-freq").textContent = fmtHz(params.frequency);
   setTone();
 }
 const numOrNull = (el, lo, hi) => { const v = parseFloat(el.value); return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : null; };
 $("freq-range").addEventListener("input", (e) => { params.frequency = +fromSlider(+e.target.value).toFixed(1); regenerate(260); });
 $("freq-num").addEventListener("change", (e) => { const v = parseFloat(e.target.value); if (v > 0) { params.frequency = v; regenerate(0); } });
-$("preset-seg").addEventListener("click", (e) => { const v = e.target.closest("button")?.dataset.v; if (v && v !== params.preset) { params.preset = v; params.gravity = null; params.material = null; regenerate(0); } });
+$("preset-seg").addEventListener("click", (e) => { const v = e.target.closest("button")?.dataset.v; if (v && v !== params.preset) { params.preset = v; params.gravity = null; params.material = null; if (v !== "custom") params.customMaterial = null; regenerate(0); } });
+// custom settlement fields
+{
+  const wrap = $("custom-fields");
+  for (const [k, f] of Object.entries(CUSTOM_FIELDS)) {
+    const label = document.createElement("label"); label.className = "field"; label.htmlFor = `custom-${k}`;
+    const input = document.createElement("input"); input.type = "number"; input.id = `custom-${k}`; input.min = f.min; input.max = f.max; input.step = "any";
+    label.append(document.createTextNode(f.label), input); wrap.append(label);
+    input.addEventListener("change", () => { const v = parseFloat(input.value); if (Number.isFinite(v)) params.custom[k] = v; else delete params.custom[k]; regenerate(0); });
+  }
+  $("custom-base").addEventListener("change", (e) => { params.custom.base = e.target.value; delete params.custom.arcology; regenerate(0); });
+  $("custom-style").addEventListener("change", (e) => { if (e.target.value) params.custom.style = e.target.value; else delete params.custom.style; regenerate(0); });
+  $("custom-label").addEventListener("change", (e) => { if (e.target.value.trim()) params.custom.label = e.target.value.trim(); else delete params.custom.label; regenerate(0); });
+  $("custom-arcology").addEventListener("change", (e) => { params.custom.arcology = e.target.checked; regenerate(0); });
+  const mat = () => {
+    const sg = parseFloat($("mat-sigma").value), rho = parseFloat($("mat-rho").value);
+    params.customMaterial = sg > 0 && rho > 0 ? { label: $("mat-label").value.trim() || "Custom material", sigma: sg * 1e6, rho } : null;
+    if (params.customMaterial) params.material = null;
+    regenerate(0);
+  };
+  for (const id of ["mat-sigma", "mat-rho", "mat-label"]) $(id).addEventListener("change", mat);
+}
+$("enforce").addEventListener("change", (e) => { params.enforce = e.target.checked; regenerate(0); });
+for (const [k, t] of Object.entries(THEMES)) $("theme").append(new Option(t.label, k));
+$("theme").addEventListener("change", (e) => { params.theme = e.target.value; applyTheme(); remember(); if (layout) show(layout); });
+$("profile-copy").addEventListener("click", async () => {
+  const text = JSON.stringify(profileOf(), null, 2);
+  $("profile-text").value = text;
+  try { await navigator.clipboard.writeText(text); $("status").textContent = "Profile copied."; } catch { $("profile-text").select(); $("status").textContent = "Profile shown below; copy it from there."; }
+});
+$("profile-apply").addEventListener("click", () => {
+  try { applyProfile(JSON.parse($("profile-text").value)); $("status").textContent = "Profile applied."; }
+  catch (err) { $("status").textContent = `Could not apply that profile: ${err.message}`; }
+});
 $("plate-seg").addEventListener("click", (e) => { const v = e.target.closest("button")?.dataset.v; if (v && v !== params.plate) { params.plate = v; params.fundamentalHz = null; params.driveOffset = null; params.azimuthal = null; regenerate(0); } });
 $("seed").addEventListener("change", (e) => { params.seed = Math.max(0, parseInt(e.target.value, 10) || 0); regenerate(0); });
 $("reroll").addEventListener("click", () => { params.seed = Math.floor(Math.random() * 1e6); regenerate(0); });
 $("q").addEventListener("change", (e) => { params.Q = numOrNull(e.target, 2, 1000) ?? 100; regenerate(0); });
 $("inverse").addEventListener("change", (e) => { params.inverse = e.target.checked; regenerate(0); });
 $("gravity").addEventListener("change", (e) => { params.gravity = numOrNull(e.target, 0.05, 5); regenerate(0); });
-$("material").addEventListener("change", (e) => { params.material = e.target.value || null; regenerate(0); });
+$("material").addEventListener("change", (e) => { params.material = e.target.value || null; if (params.material) params.customMaterial = null; regenerate(0); });
 $("fund").addEventListener("change", (e) => { params.fundamentalHz = numOrNull(e.target, 1, 2000); regenerate(0); });
 $("drive").addEventListener("change", (e) => { params.driveOffset = numOrNull(e.target, 0, 0.95); regenerate(0); });
 $("azimuthal").addEventListener("change", (e) => { const v = numOrNull(e.target, 0, 48); params.azimuthal = v == null ? null : Math.round(v); regenerate(0); });
@@ -881,7 +1016,7 @@ function describe(kind, r, L) {
   const g = L.meta.gravity;
   switch (kind) {
     case "building": {
-      const zone = { core: "Core (antinode crest)", mixed: "Mixed use", residential: "Residential", green: "Green" }[r.zone];
+      const zone = themeName(r.zone, { core: "Core (antinode crest)", mixed: "Mixed use", residential: "Residential", green: "Green" }[r.zone]);
       const lat = L.infra?.laterals.find((l) => L.buildings[l.building] === r);
       return { title: `${r.landmark ? "Landmark · " : ""}${zone}`, color: "#e4d3b4", pos: r.pos, size: Math.max(r.w, r.d, r.h), rows: [
         ["Height", `${fmt(r.h, 0)} m`], ["Floors", r.floors], ["Footprint", `${fmt(r.w, 0)} × ${fmt(r.d, 0)} m`], ["Slenderness", `1:${fmt(r.h / Math.min(r.w, r.d))}`],
@@ -890,29 +1025,29 @@ function describe(kind, r, L) {
       ] };
     }
     case "road": return { title: `${r.kind[0].toUpperCase()}${r.kind.slice(1)} street`, color: ROAD[r.kind], pos: r.a, size: r.w * 4, rows: [["Width", `${fmt(r.w)} m`], ["Segment", `${fmt(dist3(r.a, r.b))} m`]] };
-    case "sewer": return { title: r.forceMain ? "Force main (pumped)" : "Gravity sewer", color: NET.sewer.color, pos: nodes[r.up].pos, depth: r.upDepth, size: 20, rows: [
+    case "sewer": return { title: r.forceMain ? `${themeName("sewer", "Sewer")} · force main (pumped)` : themeName("sewer", "Gravity sewer"), color: NET.sewer.color, pos: nodes[r.up].pos, depth: r.upDepth, size: 20, rows: [
       ["Diameter", `${Math.round(r.diameter * 1000)} mm`], ["Slope", `${(r.slope * 100).toFixed(2)} % (min ${(sewerMinSlope(r.diameter, g) * 100).toFixed(2)} %)`],
       ["Depth", `${fmt(r.upDepth)} → ${fmt(r.downDepth)} m`], ["Peak flow", `${fmt(r.flow * 1000)} L/s`], ["Average", `${fmt(r.avgFlow * 86400, 0)} m³/day`],
       ["Length", `${fmt(r.length)} m`], ["Flows to", `node ${r.down}${r.lift ? " via lift station" : ""}`], ["Outfall", `treatment plant ${r.plant + 1}`] ] };
-    case "water": return { title: { trunk: "Trunk main", distribution: "Distribution main", loop: "Loop main" }[r.kind], color: NET.water.color, pos: nodes[r.a].pos, depth: r.depth, size: 20, rows: [
-      ["Diameter", `${Math.round(r.diameter * 1000)} mm`], ["Peak flow", r.flow > 0 ? `${fmt(r.flow * 1000)} L/s` : "loop (not modelled)"], ["Velocity", r.flow > 0 ? `${fmt(r.velocity, 2)} m/s` : "—"],
+    case "water": return { title: `${themeName("water", "Water")} · ${{ trunk: "trunk main", distribution: "distribution main", loop: "loop main" }[r.kind]}`, color: NET.water.color, pos: nodes[r.a].pos, depth: r.depth, size: 20, rows: [
+      ["Diameter", `${Math.round(r.diameter * 1000)} mm`], ["Design flow", r.flow > 0 ? `${fmt(r.flow * 1000)} L/s (${r.kind === "trunk" ? "max day" : "peak hour"})` : "loop (not modelled)"], ["Velocity", r.flow > 0 ? `${fmt(r.velocity, 2)} m/s` : "—"],
       ["Depth", `${fmt(r.depth)} m`], ["Length", `${fmt(r.length)} m`], ["Pressure zone", r.zone >= 0 ? `tank ${r.zone + 1}` : "—"] ] };
-    case "power": return { title: `${r.kV} kV feeder`, color: NET.power.color, pos: nodes[r.a].pos, depth: r.depth, size: 20, rows: [
+    case "power": return { title: themeName("power", `${r.kV} kV feeder`), color: NET.power.color, pos: nodes[r.a].pos, depth: r.depth, size: 20, rows: [
       ["Load", `${fmt(r.loadMVA, 2)} MVA`], ["Cable class", `${r.classMVA} MVA`], ["Depth", `${fmt(r.depth)} m`], ["Length", `${fmt(r.length)} m`], ["Substation", `${r.substation + 1}`] ] };
-    case "transmission": return { title: `${r.kV} kV transmission`, color: NET.transmission.color, pos: nodes[r.a].pos, depth: r.depth, size: 20, rows: [["Depth", `${fmt(r.depth)} m`], ["Length", `${fmt(r.length)} m`], ["Type", "underground cable"]] };
-    case "transit": return { title: `Metro tunnel (line ${r.line})`, color: NET.transit.color, pos: nodes[r.a].pos, depth: r.depth, size: 40, rows: [
+    case "transmission": return { title: themeName("transmission", `${r.kV} kV transmission`), color: NET.transmission.color, pos: nodes[r.a].pos, depth: r.depth, size: 20, rows: [["Depth", `${fmt(r.depth)} m`], ["Length", `${fmt(r.length)} m`], ["Type", "underground cable"]] };
+    case "transit": return { title: `${themeName("transit", "Metro tunnel")} (line ${r.line})`, color: NET.transit.color, pos: nodes[r.a].pos, depth: r.depth, size: 40, rows: [
       ["Bore", `${fmt(r.diameter)} m`], ["Depth to axis", `${fmt(r.depth)} m`], ["Length", `${fmt(r.length)} m`], ["Foundations crossed", r.nearBuildings.length],
       ["Clearance", r.nearBuildings.length ? `${fmt(Math.min(...r.nearBuildings.map((bi) => r.depth - r.diameter / 2 - foundationDepth(L.buildings[bi]))))} m` : "open ground"] ] };
-    case "utilidor": return { title: "Utility tunnel", color: NET.utilidor.color, pos: nodes[r.a].pos, depth: r.depth, size: 20, rows: [["Section", `${r.width} × ${r.height} m`], ["Depth", `${r.depth} m`], ["Carries", r.carries.join(", ")], ["Length", `${fmt(r.length)} m`]] };
-    case "lateral": return { title: "Service connection", color: NET.lateral.color, pos: L.buildings[r.building].pos, size: 15, rows: [["Length", `${fmt(r.length)} m`], ["Street node", r.node], ["Serves", `${Math.round(r.residents)} residents, ${Math.round(r.jobs)} jobs`]] };
-    case "treatment": return { title: "Wastewater treatment plant", color: "#c9a45c", pos: r.pos, size: 60, rows: [["Inflow", `${fmt(r.flowM3Day, 0)} m³/day`], ["Serves", `${r.served.toLocaleString("en-US")} people`], ["Inlet depth", `${fmt(r.depth)} m`]] };
-    case "lift": return { title: "Sewage lift station", color: "#c9a45c", pos: r.pos, depth: r.fromDepth / 2, size: 15, rows: [["Lifts from", `${fmt(r.fromDepth)} m to ${SEWER.minCover} m`], ["Peak flow", `${fmt(r.flow * 1000)} L/s`], ["Why", `gravity run would pass ${SEWER.maxDepth} m`]] };
-    case "manhole": return { title: "Manhole", color: "#9f8f70", pos: r.pos, depth: r.depth / 2, size: 10, rows: [["Invert depth", `${fmt(r.depth)} m`], ["Node", r.node]] };
-    case "tower": return { title: "Elevated water tank", color: NET.water.color, pos: r.pos, size: r.height * 1.5, rows: [["Height", `${fmt(r.height, 0)} m${r.pumped ? " + pumps" : ""}`], ["Storage", `${fmt(r.storageM3, 0)} m³ (one day)`], ["Serves", `${r.served.toLocaleString("en-US")} people`], ["Demand", `${fmt(r.demandM3Day, 0)} m³/day`]] };
-    case "waterplant": return { title: "Water treatment plant", color: NET.water.color, pos: r.pos, size: 60, rows: [["Capacity", `${fmt(r.capacityM3Day, 0)} m³/day (max day)`]] };
-    case "plant": return { title: r.kind === "core reactor" ? "Core reactor" : "Power station", color: NET.transmission.color, pos: r.pos, size: 80, rows: [["Capacity", `${r.capacityMW} MW`], ["City peak", `${fmt(L.infra.power.peakMW, 0)} MW`]] };
-    case "substation": return { title: `Substation ${r.kV} kV`, color: NET.power.color, pos: r.pos, size: 30, rows: [["Load", `${fmt(r.loadMVA)} of ${r.ratingMVA} MVA (${Math.round((100 * r.loadMVA) / r.ratingMVA)} %)`], ["Transformers", r.banks]] };
-    case "station": return { title: r.name, color: NET.transit.color, pos: r.pos, depth: r.depth, size: 120, rows: [["Platform depth", `${fmt(r.depth)} m`], ["Box", `${TRANSIT.stationLength} × ${TRANSIT.stationWidth} m`], ["District", r.district]] };
+    case "utilidor": return { title: themeName("utilidor", "Utility tunnel"), color: NET.utilidor.color, pos: nodes[r.a].pos, depth: r.depth, size: 20, rows: [["Section", `${r.width} × ${r.height} m`], ["Depth", `${r.depth} m`], ["Carries", r.carries.join(", ")], ["Length", `${fmt(r.length)} m`]] };
+    case "lateral": return { title: themeName("lateral", "Service connection"), color: NET.lateral.color, pos: L.buildings[r.building].pos, size: 15, rows: [["Length", `${fmt(r.length)} m`], ["Street node", r.node], ["Serves", `${Math.round(r.residents)} residents, ${Math.round(r.jobs)} jobs`]] };
+    case "treatment": return { title: themeName("treatment", "Wastewater treatment plant"), color: "#c9a45c", pos: r.pos, size: 60, rows: [["Inflow", `${fmt(r.flowM3Day, 0)} m³/day`], ["Serves", `${r.served.toLocaleString("en-US")} people`], ["Inlet depth", `${fmt(r.depth)} m`]] };
+    case "lift": return { title: themeName("lift", "Sewage lift station"), color: "#c9a45c", pos: r.pos, depth: r.fromDepth / 2, size: 15, rows: [["Lifts from", `${fmt(r.fromDepth)} m to ${SEWER.minCover} m`], ["Peak flow", `${fmt(r.flow * 1000)} L/s`], ["Why", `gravity run would pass ${SEWER.maxDepth} m`]] };
+    case "manhole": return { title: themeName("manhole", "Manhole"), color: "#9f8f70", pos: r.pos, depth: r.depth / 2, size: 10, rows: [["Invert depth", `${fmt(r.depth)} m`], ["Node", r.node]] };
+    case "tower": return { title: themeName("tower", "Elevated water tank"), color: NET.water.color, pos: r.pos, size: r.height * 1.5, rows: [["Height", `${fmt(r.height, 0)} m${r.pumped ? " + pumps" : ""}`], ["Storage", `${fmt(r.storageM3, 0)} m³ (one day)`], ["Serves", `${r.served.toLocaleString("en-US")} people`], ["Demand", `${fmt(r.demandM3Day, 0)} m³/day`]] };
+    case "waterplant": return { title: themeName("waterplant", "Water treatment plant"), color: NET.water.color, pos: r.pos, size: 60, rows: [["Capacity", `${fmt(r.capacityM3Day, 0)} m³/day (max day)`]] };
+    case "plant": return { title: themeName("plant", r.kind === "core reactor" ? "Core reactor" : "Power station"), color: NET.transmission.color, pos: r.pos, size: 80, rows: [["Capacity", `${r.capacityMW} MW`], ["City peak", `${fmt(L.infra.power.peakMW, 0)} MW`]] };
+    case "substation": return { title: themeName("substation", `Substation ${r.kV} kV`), color: NET.power.color, pos: r.pos, size: 30, rows: [["Load", `${fmt(r.loadMVA)} of ${r.ratingMVA} MVA (${Math.round((100 * r.loadMVA) / r.ratingMVA)} %)`], ["Transformers", r.banks]] };
+    case "station": return { title: themeName("station", r.name), color: NET.transit.color, pos: r.pos, depth: r.depth, size: 120, rows: [["Platform depth", `${fmt(r.depth)} m`], ["Box", `${TRANSIT.stationLength} × ${TRANSIT.stationWidth} m`], ["District", r.district]] };
     default: return { title: kind, color: "#fff", pos: r.pos ?? [0, 0, 0], size: 20, rows: [] };
   }
 }
@@ -949,7 +1084,7 @@ canvas.addEventListener("pointerup", (e) => {
   mesh.getColorAt(hit.instanceId, prev); mesh.setColorAt(hit.instanceId, new THREE.Color("#fff1c2")); mesh.instanceColor.needsUpdate = true;
   selected = { mesh, id: hit.instanceId, color: prev };
   const box = $("pick"); box.replaceChildren(); box.style.setProperty("--c", d.color);
-  const kindEl = document.createElement("div"); kindEl.className = "kind"; kindEl.textContent = ud.kind.replace("waterplant", "water plant");
+  const kindEl = document.createElement("div"); kindEl.className = "kind"; kindEl.textContent = themeName(ud.kind, ud.kind.replace("waterplant", "water plant"));
   const t = document.createElement("b"); t.textContent = d.title;
   const dl = document.createElement("dl");
   for (const [k, v] of d.rows) { const dt = document.createElement("dt"); dt.textContent = k; const dd = document.createElement("dd"); dd.textContent = v; dl.append(dt, dd); }
@@ -1012,8 +1147,9 @@ $("save-model").addEventListener("click", () => {
     `${s.buildings} buildings, ${s.roadLengthKm.toFixed(1)} km of streets, about ${s.population} residents and ${s.jobs} jobs.`, ``,
     `city.obj: Wavefront OBJ in metres, y up. One object per building (prisms) and per road segment (flat strips); the networks follow as line objects (sewer_pipes, water_mains, power_feeders, power_transmission, transit_tunnels, utility_tunnels) at their true depths.`,
     `layout.json: every road segment, building (position, up, forward, width, depth, height, floors, zone, phase) and tree, plus stats and checks, and "infra": the street graph (nodes, edges), service laterals, sewer pipes (diameter, slope, depths, flow), lift stations, treatment plants, water mains and tanks, power plant, substations, feeders and transmission, metro stations and tunnels, utility tunnels.`,
+    `profile.json: the exact settings (and theme) that made this city; paste it into the engine's "Apply pasted profile" box or pass it to generateCity().`,
     `Same settings + same seed reproduce this layout exactly.`].join("\n");
-  const zip = zipStore([{ name: "city.obj", text: toOBJ(layout) }, { name: "layout.json", text: toJSON(layout) }, { name: "README.txt", text: readme }]);
+  const zip = zipStore([{ name: "city.obj", text: toOBJ(layout) }, { name: "layout.json", text: toJSON(layout) }, { name: "profile.json", text: JSON.stringify(profileOf(), null, 2) }, { name: "README.txt", text: readme }]);
   offer(`${baseName()}.zip`, new Blob([zip]));
 });
 $("save-png").addEventListener("click", () => {
@@ -1023,6 +1159,7 @@ $("save-png").addEventListener("click", () => {
 });
 
 // small debugging hook: window.cymatic.layout / camera / controls
-window.cymatic = { get layout() { return layout; }, camera, controls, invalidate, focusOn };
+window.cymatic = { get layout() { return layout; }, camera, controls, invalidate, focusOn, profile: profileOf, applyProfile };
+applyTheme();
 regenerate(0);
 </script>

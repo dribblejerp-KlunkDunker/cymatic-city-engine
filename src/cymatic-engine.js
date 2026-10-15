@@ -280,8 +280,18 @@ export const PRESETS = {
 };
 
 // Self-weight crushing limit of an untapered solid column, h = σ / (ρ g SF).
-export function heightLimit(materialKey, gravityRel) {
-  const mat = MATERIALS[materialKey];
+// A material is a key into MATERIALS or a custom { label, sigma (Pa), rho (kg/m³) }.
+export function resolveMaterial(m, fallback) {
+  if (m && typeof m === 'object') {
+    const sigma = Number(m.sigma), rho = Number(m.rho);
+    if (!(sigma > 0) || !(rho > 0)) throw new Error('A custom material needs a positive compressive strength (sigma, Pa) and density (rho, kg/m³)');
+    return { key: 'custom', label: String(m.label ?? 'Custom material'), sigma, rho, speculative: true };
+  }
+  const key = m && MATERIALS[m] ? m : fallback;
+  return { key, ...MATERIALS[key] };
+}
+export function heightLimit(material, gravityRel) {
+  const mat = typeof material === 'string' ? MATERIALS[material] : resolveMaterial(material, 'concrete');
   return mat.sigma / (mat.rho * G0 * gravityRel * SAFETY_FACTOR);
 }
 // Slenderness allowance grows as self-buckling eases with lower gravity (Greenhill, ∝ g^-1/3).
@@ -289,10 +299,49 @@ export function slendernessLimit(base, gravityRel) {
   return Math.min(40, base * Math.pow(1 / gravityRel, 1 / 3));
 }
 
+// Fields a custom preset may override, with their allowed ranges.
+export const CUSTOM_FIELDS = {
+  radius: { label: 'World radius (m)', min: 150, max: 20000 },
+  lot: { label: 'Lot size (m)', min: 10, max: 120 },
+  floorH: { label: 'Floor height (m)', min: 2.2, max: 12 },
+  floorsMin: { label: 'Fewest floors', min: 1, max: 50 },
+  floorsMax: { label: 'Most floors (outside the core)', min: 1, max: 200 },
+  coreFloors: { label: 'Core tower floors', min: 1, max: 1000 },
+  streetSpacing: { label: 'Street spacing (m)', min: 30, max: 400 },
+  slender: { label: 'Slenderness limit (1:n)', min: 1, max: 40 },
+  designHeight: { label: 'Arcology design height (m)', min: 20, max: 5000 },
+  terraceFloors: { label: 'Floors per terrace step', min: 1, max: 20 },
+};
+// Build a preset from a base preset plus overrides: { base: 'city', radius: 5000, floorsMax: 30, ... }
+export function customPreset(spec = {}) {
+  const base = PRESETS[spec.base ?? 'city'];
+  if (!base) throw new Error(`Unknown base preset "${spec.base}"`);
+  const pr = { ...base, widths: { ...base.widths }, floors: base.floors ? [...base.floors] : undefined, label: String(spec.label ?? `Custom ${base.label.toLowerCase()}`), custom: true, base: spec.base ?? 'city' };
+  for (const [k, f] of Object.entries(CUSTOM_FIELDS)) {
+    if (spec[k] == null || spec[k] === '') continue;
+    const v = Number(spec[k]);
+    if (!Number.isFinite(v)) throw new Error(`${f.label} must be a number`);
+    const c = clamp(v, f.min, f.max);
+    if (k === 'floorsMin') pr.floors = [c, pr.floors?.[1] ?? c]; else if (k === 'floorsMax') pr.floors = [pr.floors?.[0] ?? 1, c]; else pr[k] = c;
+  }
+  if (pr.floors) pr.floors = [Math.min(pr.floors[0], pr.floors[1]), Math.max(pr.floors[0], pr.floors[1])];
+  if (spec.arcology != null) pr.arcology = !!spec.arcology;
+  if (spec.style && PRESET_STYLES.includes(spec.style)) pr.style = spec.style;
+  if (spec.gravity != null) pr.gravity = clamp(Number(spec.gravity), 0.05, 5);
+  if (spec.material) pr.material = spec.material;
+  // street widths scale with the street spacing of the base preset
+  const k = pr.streetSpacing && base.streetSpacing ? clamp(pr.streetSpacing / base.streetSpacing, 0.5, 2) : 1;
+  for (const w of Object.keys(pr.widths)) pr.widths[w] = base.widths[w] * k;
+  return pr;
+}
+export const PRESET_STYLES = ['town', 'city', 'mega', 'alien'];
+
 export function resolveParams(input = {}) {
   const plate = input.plate ?? 'circle';
-  const presetKey = input.preset ?? 'city';
-  const preset = PRESETS[presetKey];
+  let presetKey = input.preset ?? 'city', preset;
+  if (presetKey && typeof presetKey === 'object') { preset = customPreset(presetKey); presetKey = 'custom'; }
+  else if (presetKey === 'custom') { preset = customPreset(input.custom ?? {}); }
+  else preset = PRESETS[presetKey];
   if (!PLATES[plate]) throw new Error(`Unknown plate "${plate}"`);
   if (!preset) throw new Error(`Unknown preset "${presetKey}"`);
   const num = (v, name) => { const x = Number(v); if (!Number.isFinite(x)) throw new Error(`${name} must be a number`); return x; };
@@ -308,12 +357,15 @@ export function resolveParams(input = {}) {
   if (driveOffset < 0 || driveOffset > 0.95) throw new Error('Drive point must be between 0 (centre) and 0.95 (near the edge)');
   const az = input.azimuthal ?? 'auto';
   if (az !== 'auto' && !(Number.isInteger(az) && az >= 0)) throw new Error('Sphere meridian count must be "auto" or a whole number ≥ 0');
+  const material = resolveMaterial(input.material ?? preset.material, preset.custom ? 'concrete' : preset.material);
   return {
     frequency: clamp(frequency, lo, hi), plate, presetKey, preset, fundamentalHz, driveOffset, azimuthal: az,
     seed: (input.seed ?? 1) >>> 0,
     Q: clamp(num(input.Q ?? 100, 'Q'), 2, 1000),
     gravity: clamp(num(input.gravity ?? preset.gravity, 'Gravity'), 0.05, 5),
-    material: input.material && MATERIALS[input.material] ? input.material : preset.material,
+    material: material.key, materialSpec: material,
+    // enforce: physical limits cap the buildings (realism); false reports them as checks only (fantasy)
+    enforce: input.enforce !== false,
     inverse: !!input.inverse,
   };
 }
@@ -787,8 +839,11 @@ export function generateCity(input = {}) {
   for (const r of rd.roads) { hash.insert(r); reach.insert(r); }
 
   const rng = mulberry32(p.seed * 2654435761 + 17);
-  const hMat = heightLimit(p.material, p.gravity);
-  const slender = pr.arcology ? Infinity : slendernessLimit(pr.slender, p.gravity);
+  const hLimit = heightLimit(p.materialSpec, p.gravity);
+  const sLimit = pr.arcology ? Infinity : slendernessLimit(pr.slender, p.gravity);
+  // with enforcement off the limits are only reported, never applied
+  const hMat = p.enforce ? hLimit : Infinity, slender = p.enforce ? sLimit : Infinity;
+  const coreFloorsCap = p.enforce ? CORE_FLOORS : Infinity;
   const setback = pr.arcology ? 2 : 1.5; // metres from the road edge (sidewalks are inside road widths)
 
   const districtAt = (u, v) => {
@@ -849,7 +904,7 @@ export function generateCity(input = {}) {
     }
     // Terracing: no cell may rise more than `rise` above any neighbour (an open cell counts as 0 m),
     // so every exposed face keeps the slenderness of a real tower. Dijkstra from the low cells.
-    terraceRise = Math.max(step, Math.floor((slendernessLimit(8, p.gravity) * foot) / step) * step);
+    terraceRise = p.enforce ? Math.max(step, Math.floor((slendernessLimit(8, p.gravity) * foot) / step) * step) : Infinity;
     const nbrs = neighbourLists(dom, lots, pr.lot);
     // open cells are 0 m; cells on the plate edge have an open neighbour outside the plate
     const hv = cellOf.map((bi, i) => (bi < 0 ? 0 : nbrs[i].missing ? Math.min(buildings[bi].h, terraceRise) : buildings[bi].h));
@@ -979,7 +1034,7 @@ export function generateCity(input = {}) {
         if (h > slender * Math.min(b.w, b.d)) { h = slender * Math.min(b.w, b.d); binding.slenderness++; }
       }
       // a building over six floors needs a lift-and-stair core plus usable floor around it
-      if (h > CORE_FLOORS * pr.floorH && Math.min(b.w, b.d) < MIN_CORE_SIDE) {
+      if (h > coreFloorsCap * pr.floorH && Math.min(b.w, b.d) < MIN_CORE_SIDE) {
         let side = MIN_CORE_SIDE;
         const ok = canWiden(b, Math.max(b.w, side), Math.max(b.d, side));
         if (ok) { b.w = Math.max(b.w, side); b.d = Math.max(b.d, side); }
@@ -1030,8 +1085,10 @@ export function generateCity(input = {}) {
     tallest: buildings.reduce((m, b) => (b.h > (m?.h ?? -1) ? b : m), null)?.floors ?? 0,
     districts: sizable,
     nodalSpacing: rd.nodalSpacing,
-    heightLimit: hMat,
-    slendernessLimit: slender,
+    heightLimit: hLimit,
+    slendernessLimit: sLimit,
+    terraceLimit: pr.arcology ? Math.max(pr.terraceFloors * pr.floorH, Math.floor((slendernessLimit(8, p.gravity) * (dom.kind === 'plane' ? pr.lot * 0.97 : pr.lot * 0.58)) / (pr.terraceFloors * pr.floorH)) * pr.terraceFloors * pr.floorH) : null,
+    enforce: p.enforce,
     binding,
     // measured, not assumed
     maxSlenderness: buildings.reduce((m, b) => (b.shape === 'dome' || b.shape === 'terrace' ? m : Math.max(m, b.h / Math.min(b.w, b.d))), 0),
@@ -1048,9 +1105,10 @@ export function generateCity(input = {}) {
     meta: {
       engine: ENGINE_VERSION,
       frequency: p.frequency, note: noteName(p.frequency), plate: p.plate, plateLabel: PLATES[p.plate].label,
-      law: PLATES[p.plate].law, preset: p.presetKey, presetLabel: pr.label, seed: p.seed, Q: p.Q,
+      law: PLATES[p.plate].law, preset: p.presetKey, base: pr.base ?? p.presetKey, arcology: !!pr.arcology, presetLabel: pr.label, seed: p.seed, Q: p.Q,
       fundamentalHz: p.fundamentalHz, driveOffset: p.driveOffset, gravity: p.gravity, material: p.material,
-      materialLabel: MATERIALS[p.material].label, inverse: p.inverse,
+      materialLabel: p.materialSpec.label, materialSpec: p.materialSpec, inverse: p.inverse, enforce: p.enforce,
+      presetSpec: pr.custom ? { ...pr } : null,
       modes: resp.active.map((m) => ({ label: modeLabel(m), f: m.f, weight: m.weight, detuneHz: m.detuneHz, m: m.m, n: m.n, l: m.l })),
       dominant: modeLabel(dominant), symmetry: symmetryNote(dominant),
       world: { shape: dom.shape, extent: dom.extent, area: dom.area, Rs: dom.Rs ?? null },
@@ -1101,9 +1159,10 @@ function plausibilityChecks(p, s) {
     add('access', 'Farthest building from a street', `${s.maxStreetDistance.toFixed(0)} m (limit ${s.accessLimit.toFixed(0)} m)`,
       s.maxStreetDistance <= s.accessLimit + 1e-6 ? 'pass' : 'fail', 'Lots beyond walking reach become green space');
   } else {
-    add('terrace', 'Largest terrace step', `${s.maxTerraceStep.toFixed(0)} m (limit ${s.terraceRise.toFixed(0)} m)`,
-      s.maxTerraceStep <= s.terraceRise + 1e-6 ? 'pass' : 'fail', 'Each exposed face kept within 1:8 slenderness; open canyons count as 0 m');
+    add('terrace', 'Largest terrace step', `${s.maxTerraceStep.toFixed(0)} m (limit ${s.terraceLimit.toFixed(0)} m)`,
+      s.maxTerraceStep <= s.terraceLimit + 1e-6 ? 'pass' : 'fail', 'Each exposed face kept within 1:8 slenderness; open canyons count as 0 m');
   }
+  if (!p.enforce) add('enforce', 'Physical limits', 'reported, not enforced', 'warn', 'Fantasy mode: buildings keep their generated heights; the checks above say what real materials would allow');
   add('setback', 'Closest building to a road edge', `${s.minRoadClearance.toFixed(1)} m`,
     s.minRoadClearance >= 0 ? 'pass' : 'fail', 'Footprints clear every road; overlap between lots is ruled out by lot spacing');
   add('sharpness', 'Pattern sharpness', `${(s.patternSharpness * 100).toFixed(0)}%`,

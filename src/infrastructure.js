@@ -263,7 +263,7 @@ export function buildStreetGraph(layout) {
       const i = members[c].reduce((m, k) => (dist(nodes[k].pos, nodes[j].pos) < dist(nodes[m].pos, nodes[j].pos) ? k : m), members[c][0]);
       bestPair = [i, j, dist(nodes[i].pos, nodes[j].pos)];
     }
-    pushEdge(bestPair[0], bestPair[1], layout.meta.preset === 'megastructure' ? 'corridor' : 'service', 4); connectors++;
+    pushEdge(bestPair[0], bestPair[1], (layout.meta.arcology ?? layout.meta.preset === 'megastructure') ? 'corridor' : 'service', 4); connectors++;
   }
   const adj2 = nodes.map(() => []);
   edges.forEach((e, i) => { adj2[e.a].push(i); adj2[e.b].push(i); nodes[e.a].deg++; nodes[e.b].deg++; });
@@ -274,7 +274,8 @@ export function buildStreetGraph(layout) {
 export function buildInfrastructure(layout) {
   const t0 = Date.now();
   const meta = layout.meta, pr = layout.presetParams ?? null;
-  const g = meta.gravity, arcology = meta.preset === 'megastructure', town = meta.preset === 'town';
+  const base = meta.base ?? meta.preset;
+  const g = meta.gravity, arcology = meta.arcology ?? base === 'megastructure', town = base === 'town';
   const sphere = meta.plate === 'sphere';
   const upAt = (P) => (sphere ? norm3(P) : [0, 1, 0]);
   const graph = buildStreetGraph(layout);
@@ -414,7 +415,7 @@ export function buildInfrastructure(layout) {
 
   // ---- power: plant, substations sized to their zones, feeders, transmission
   const power = (() => {
-    const rating = POWER.substationMVA[meta.preset];
+    const rating = POWER.substationMVA[base] ?? 60;
     const loadAt = new Float64Array(N);
     for (let i = 0; i < N; i++) loadAt[i] = ((resAt[i] * POWER.kWPerResident + jobsAt[i] * POWER.kWPerJob) * POWER.peakFactor) / 1000 / POWER.powerFactor; // MVA
     const peakMVA = loadAt.reduce((s, x) => s + x, 0);
@@ -448,14 +449,14 @@ export function buildInfrastructure(layout) {
       return { node: n, pos: graph.nodes[n].pos, ratingMVA: rating * banks, banks, loadMVA: zoneLoad[i], kV: `${POWER.transmissionKV}/${POWER.distributionKV}` };
     });
     // plant: central core for arcologies and alien cities, perimeter otherwise
-    const plantNode = arcology || meta.preset === 'alien'
+    const plantNode = arcology || base === 'alien'
       ? nearestNode(centre)
       : siteCandidates.reduce((m, i) => {
         const score = (n) => Math.min(dist(graph.nodes[n].pos, water.plant.pos), ...sewer.plants.map((p) => dist(graph.nodes[n].pos, p.pos)));
         return score(i) > score(m) ? i : m;
       }, siteCandidates[0]);
     const peakMW = peakMVA * POWER.powerFactor;
-    const plants = [{ node: plantNode, pos: graph.nodes[plantNode].pos, capacityMW: Math.ceil((peakMW * 1.25) / 50) * 50, kind: arcology || meta.preset === 'alien' ? 'core reactor' : 'power station' }];
+    const plants = [{ node: plantNode, pos: graph.nodes[plantNode].pos, capacityMW: Math.ceil((peakMW * 1.25) / 50) * 50, kind: arcology || base === 'alien' ? 'core reactor' : 'power station' }];
     // transmission: the shortest-path tree from the plant, so lines share corridors toward the plant
     const tx = dijkstra(graph, [plantNode]);
     const used = new Set();
@@ -589,7 +590,7 @@ export function buildInfrastructure(layout) {
   check('sewer-depth', 'Deepest sewer', `${maxSewerDepth.toFixed(1)} m, ${sewer.liftStations.length} lift station${sewer.liftStations.length === 1 ? '' : 's'}${stats.forceMains ? `, ${stats.forceMains} force main${stats.forceMains === 1 ? '' : 's'}` : ''}`, maxSewerDepth <= SEWER.maxDepth + 1e-6 ? 'pass' : 'fail', `Runs deeper than ${SEWER.maxDepth} m get a lift station; runs too long for gravity are pumped`);
   check('water-velocity', 'Fastest water main', `${maxVel.toFixed(2)} m/s`, maxVel <= WATER.maxVelocity ? 'pass' : 'fail', 'Sized for 1.5 m/s at peak hour; 2.5 m/s limit');
   check('water-pressure', 'Tank height for 3.4 bar', `${water.towerHeight.toFixed(0)} m${water.pumped ? ' + pumps' : ''}`, water.pumped ? 'warn' : 'pass', 'h = P/(ρ g): the same pressure needs taller tanks at low gravity');
-  check('substation-load', 'Most loaded substation', `${(maxSubLoad * 100).toFixed(0)}% of rating`, maxSubLoad <= 1 ? 'pass' : 'fail', `Zones split until every substation is under its ${POWER.substationMVA[meta.preset]} MVA rating`);
+  check('substation-load', 'Most loaded substation', `${(maxSubLoad * 100).toFixed(0)}% of rating`, maxSubLoad <= 1 ? 'pass' : 'fail', `Zones split until every substation is under its ${POWER.substationMVA[base] ?? 60} MVA rating`);
   if (transit.tunnels.length) {
     check('tunnel-clearance', 'Tunnel clearance under foundations', `${minTunnelClear.toFixed(1)} m`, minTunnelClear >= TRANSIT.clearance - 1e-6 ? 'pass' : 'fail', `Piles ≈ 2 m + 10 % of height; ${TRANSIT.clearance} m clearance (Singapore case histories 4.5–9 m)`);
     check('station-spacing', 'Metro stations', `${transit.stations.length} at ≥ ${TRANSIT.minSpacing} m`, 'pass', 'Urban heavy-rail spacing is about 1 km');

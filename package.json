@@ -6,5 +6,20 @@
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "build": "node build.mjs"
+  },
+  "description": "Turns a drive frequency into a full 3D town, city, megastructure or alien city from its cymatic (Chladni) pattern, with realistic structure and underground utilities.",
+  "main": "src/cymatic-engine.js",
+  "exports": {
+    ".": "./src/cymatic-engine.js",
+    "./infrastructure": "./src/infrastructure.js"
+  },
+  "files": [
+    "src",
+    "dist",
+    "README.md"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
   }
 }
