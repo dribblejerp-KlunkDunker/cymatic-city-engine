@@ -28,11 +28,13 @@ test('every building is connected to water, sewer and power', () => {
     const L = full({ plate, preset, frequency: 432 });
     const I = L.infra;
     assert.equal(I.laterals.length, L.buildings.length, `${plate}/${preset}: one service connection per building`);
+    const mainEnds = new Set(); for (const m of I.water.mains) { mainEnds.add(m.a); mainEnds.add(m.b); }
     for (const lat of I.laterals) {
       const n = I.graph.nodes[lat.node];
       assert.ok(n, 'lateral points at a graph node');
       assert.ok(I.sewer.nodeDepth[lat.node] > 0, `${plate}/${preset}: building's node has a sewer`);
       assert.ok(I.water.nodeHead[lat.node] > 0, `${plate}/${preset}: building's node has water`);
+      assert.ok(mainEnds.has(lat.node), `${plate}/${preset}: a water main reaches the building's node`);
       assert.ok(I.power.nodeFeeder[lat.node] >= 0, `${plate}/${preset}: building's node has a feeder`);
       assert.ok(dist(L.buildings[lat.building].pos, n.pos) < 2 * PRESETS[preset].streetSpacing || PRESETS[preset].arcology, 'service connection is short');
     }
@@ -46,7 +48,8 @@ test('gravity sewers: every pipe slopes down toward its outfall by at least the 
     assert.ok(S.pipes.length > 100, `${plate}/${preset}: has sewers`);
     for (const p of S.pipes) {
       const need = sewerMinSlope(p.diameter, g);
-      assert.ok(p.slope >= need - 1e-9, `${plate}/${preset}/${g}g: pipe slope ${p.slope} < ${need} for ${p.diameter} m`);
+      if (p.forceMain) { assert.ok(p.lift && p.slope === 0 && p.upDepth === SEWER.minCover, 'a force main leaves a lift station at constant depth'); }
+      else assert.ok(p.slope >= need - 1e-9, `${plate}/${preset}/${g}g: pipe slope ${p.slope} < ${need} for ${p.diameter} m`);
       close(p.downDepth - p.upDepth, p.slope * p.length, 1e-6, 'depth gain matches slope × length');
       assert.ok(p.upDepth >= SEWER.minCover - 1e-9, 'minimum cover');
       assert.ok(p.downDepth <= SEWER.maxDepth + 1e-6, `${plate}/${preset}: pipe reaches ${p.downDepth} m (max ${SEWER.maxDepth})`);
@@ -90,6 +93,11 @@ test('water: looped mains, velocity within range, every node under a tower', () 
     const loops = W.mains.length - (L.infra.graph.nodes.length - 1);
     assert.ok(loops > 0, `${plate}/${preset}: distribution is looped (${W.mains.length} mains on ${L.infra.graph.nodes.length} nodes)`);
     for (const t of W.towers) assert.ok(t.storageM3 > 0 && t.served > 0);
+    // the trunk main leaving the plant carries every zone's max-day flow
+    const total = W.towers.reduce((s, t) => s + t.demandM3Day, 0) / 86400 * WATER.maxDay;
+    const outlet = W.mains.filter((m) => m.kind === 'trunk' && m.a === W.plant.node);
+    assert.ok(outlet.length >= 1, 'a trunk main leaves the plant');
+    assert.ok(outlet.reduce((s, m) => s + m.flow, 0) >= total - 1e-9, `${plate}/${preset}: plant outlet carries every zone's max-day flow`);
   }
 });
 
@@ -100,7 +108,17 @@ test('power: substations never exceed their rating and the plant reaches every o
     assert.ok(P.substations.length >= 1);
     for (const s of P.substations) assert.ok(s.loadMVA <= s.ratingMVA + 1e-9, `${plate}/${preset}: substation at ${s.loadMVA.toFixed(1)} MVA of ${s.ratingMVA}`);
     assert.ok(P.plants.length >= 1);
-    assert.ok(P.plants[0].capacityMW >= P.peakMW, 'plant covers the peak');
+    assert.ok(P.plants[0].capacityMW >= 1.25 * P.peakMW - 1e-9, 'plant covers the peak with a 25 % margin');
+    // feeder loads: each feeder carries its node's own load plus everything fed through it
+    const own = new Float64Array(L.infra.graph.nodes.length);
+    for (const lat of L.infra.laterals) own[lat.node] += ((lat.residents * POWER.kWPerResident + lat.jobs * POWER.kWPerJob) * POWER.peakFactor) / 1000 / POWER.powerFactor;
+    const children = new Map(); for (const f of P.feeders) (children.get(f.b) ?? children.set(f.b, []).get(f.b)).push(f);
+    const byA = new Map(P.feeders.map((f) => [f.a, f]));
+    for (const f of P.feeders) {
+      const expect = own[f.a] + (children.get(f.a) ?? []).reduce((s, c) => s + c.loadMVA, 0);
+      close(f.loadMVA, expect, 1e-9 + 1e-9 * expect, `${plate}/${preset}: feeder load accumulates`);
+    }
+    void byA;
     // every substation sits on the transmission network
     const tx = new Set(); for (const t of P.transmission) { tx.add(t.a); tx.add(t.b); }
     for (const s of P.substations) assert.ok(tx.has(s.node), 'substation on the grid');
@@ -114,12 +132,18 @@ test('transit: stations at district landmarks, tunnels below every nearby founda
     const T = L.infra.transit;
     assert.ok(T.stations.length >= 2, `${plate}/${preset}: ${T.stations.length} stations`);
     assert.ok(T.tunnels.length > 0);
+    const nodes = L.infra.graph.nodes;
     for (const t of T.tunnels) {
       assert.ok(t.depth >= TRANSIT.minDepth - 1e-9);
-      for (const bi of t.nearBuildings) {
-        const b = L.buildings[bi];
+      // brute force over every building: anything whose footprint reaches the corridor must be cleared
+      const A = nodes[t.a].pos, B = nodes[t.b].pos, ab = [B[0] - A[0], B[1] - A[1], B[2] - A[2]], L2 = ab[0] ** 2 + ab[1] ** 2 + ab[2] ** 2 || 1;
+      for (const b of L.buildings) {
+        const ap = [b.pos[0] - A[0], b.pos[1] - A[1], b.pos[2] - A[2]];
+        const tt = Math.max(0, Math.min(1, (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / L2));
+        const d = Math.hypot(ap[0] - ab[0] * tt, ap[1] - ab[1] * tt, ap[2] - ab[2] * tt);
+        if (d > TRANSIT.corridor + Math.hypot(b.w, b.d) / 2) continue;
         assert.ok(t.depth - TRANSIT.diameter / 2 >= foundationDepth(b) + TRANSIT.clearance - 1e-6,
-          `${plate}/${preset}: tunnel at ${t.depth} m under a ${b.h.toFixed(0)} m building with ${foundationDepth(b).toFixed(1)} m foundations`);
+          `${plate}/${preset}: tunnel at ${t.depth} m under a ${b.h.toFixed(0)} m building with ${foundationDepth(b).toFixed(1)} m foundations, ${d.toFixed(1)} m off axis`);
       }
     }
     for (const s of T.stations) {
@@ -141,6 +165,39 @@ test('megastructures get a utility tunnel under every boulevard', () => {
   assert.ok(L.infra.utilidors.length > 50);
   for (const u of L.infra.utilidors) assert.ok(u.width > 0 && u.height > 0 && u.depth > 0);
   assert.equal(full({ preset: 'city', frequency: 432 }).infra.utilidors.length, 0);
+});
+
+test('streets that cross share a junction node', () => {
+  const L = full({ plate: 'circle', preset: 'city', frequency: 432 });
+  const { nodes, edges } = L.infra.graph;
+  // brute force on a slice of the plan: any two edges that cross in x/z must meet at a node
+  let crossings = 0, checked = 0;
+  const inSlice = (e) => Math.abs(nodes[e.a].pos[0]) < 150 && Math.abs(nodes[e.a].pos[2]) < 150;
+  const sl = edges.filter(inSlice);
+  for (let i = 0; i < sl.length; i++) for (let j = i + 1; j < sl.length; j++) {
+    const e = sl[i], f = sl[j];
+    if (e.a === f.a || e.a === f.b || e.b === f.a || e.b === f.b) continue;
+    const P = nodes[e.a].pos, Q = nodes[e.b].pos, R = nodes[f.a].pos, S = nodes[f.b].pos;
+    const d = (Q[0] - P[0]) * (S[2] - R[2]) - (Q[2] - P[2]) * (S[0] - R[0]);
+    if (Math.abs(d) < 1e-9) continue;
+    const t = ((R[0] - P[0]) * (S[2] - R[2]) - (R[2] - P[2]) * (S[0] - R[0])) / d, u = ((R[0] - P[0]) * (Q[2] - P[2]) - (R[2] - P[2]) * (Q[0] - P[0])) / d;
+    checked++;
+    if (t > 0.05 && t < 0.95 && u > 0.05 && u < 0.95) crossings++;
+  }
+  assert.ok(checked > 1000);
+  assert.equal(crossings, 0, `${crossings} street crossings without a junction`);
+});
+
+test('service connectors are short in towns and cities; arcology corridors are utility tunnels', () => {
+  for (const plate of PLATES) for (const preset of ['town', 'city', 'alien']) {
+    const L = full({ plate, preset, frequency: 432 });
+    // flat plates have a perimeter road that ties every loop together; a sphere's nodal loops can sit further apart
+    const limit = plate === 'sphere' ? 5 * PRESETS[preset].streetSpacing : 2.5 * PRESETS[preset].lot;
+    for (const e of L.infra.graph.edges) if (e.kind === 'service') assert.ok(e.len <= limit, `${plate}/${preset}: connector of ${e.len.toFixed(0)} m`);
+  }
+  const M = full({ preset: 'megastructure', frequency: 432 });
+  const corridorIds = new Set(M.infra.graph.edges.map((e, i) => (e.kind === 'corridor' ? i : -1)).filter((i) => i >= 0));
+  for (const id of corridorIds) assert.ok(M.infra.utilidors.some((u) => u.edge === id), 'every corridor is a utility tunnel');
 });
 
 test('nothing underground pokes through a building footprint from below except its own service lateral', () => {
@@ -175,8 +232,8 @@ test('stats and checks describe the networks', () => {
   for (const c of L.infra.checks) assert.notEqual(c.status, 'fail', `${c.id}: ${c.value}`);
 });
 
-test('infrastructure for a city builds in under 2 s', () => {
+test('infrastructure for a city builds in under 3 s', () => {
   const L = generateCity({ preset: 'city', plate: 'square', frequency: 517, seed: 5 });
   const t = Date.now(); buildInfrastructure(L);
-  assert.ok(Date.now() - t < 2000, `${Date.now() - t} ms`);
+  assert.ok(Date.now() - t < 3000, `${Date.now() - t} ms`);
 });

@@ -132,6 +132,33 @@ details > div { display: grid; gap: 12px; padding-top: 8px; }
 .about p b { color: var(--ink); font-weight: 600; }
 #status { min-height: 1.2em; }
 
+.viewbar {
+  position: absolute; left: calc(16px + env(safe-area-inset-left, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  display: flex; flex-direction: column; gap: 8px; align-items: flex-start; max-width: min(420px, calc(100% - 32px));
+}
+.viewbar .seg { background: color-mix(in srgb, var(--plate) 92%, transparent); backdrop-filter: blur(6px); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  font: 500 var(--step--1)/1 var(--body); padding: 6px 10px; border-radius: 999px; border: 1px solid var(--rule);
+  background: color-mix(in srgb, var(--plate) 92%, transparent); color: var(--ink-dim); cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+}
+.chip i { width: 9px; height: 9px; border-radius: 50%; background: var(--c, var(--ink-dim)); opacity: 0.4; }
+.chip[aria-pressed=true] { color: var(--ink); border-color: color-mix(in srgb, var(--c, var(--brass)) 60%, var(--rule)); }
+.chip[aria-pressed=true] i { opacity: 1; }
+.keys { font: 400 0.7rem/1.4 var(--mono); color: var(--ink-dim); text-shadow: 0 1px 8px rgba(10, 14, 18, 0.9); }
+.keys kbd { border: 1px solid var(--rule); border-radius: 3px; padding: 0 4px; color: var(--ink); }
+#pick { bottom: auto; top: calc(118px + env(safe-area-inset-top, 0px)); max-width: 300px; }
+#pick .pick-actions { display: flex; gap: 6px; margin-top: 8px; }
+#pick .pick-actions button { padding: 5px 9px; }
+#pick .kind { font: 500 0.68rem/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--c, var(--brass)); margin-bottom: 4px; }
+.slider-row { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; font-size: var(--step--1); color: var(--ink-dim); }
+.slider-row input[type=range] { grid-column: 1 / -1; }
+@media (max-width: 860px) {
+  .viewbar { bottom: auto; top: calc(96px + env(safe-area-inset-top, 0px)); }
+  #pick { top: auto; bottom: calc(66% + 8px); left: auto; right: 12px; }
+  .keys { display: none; }
+}
+
 @media (max-width: 860px) {
   #panel {
     top: auto; left: 0; right: 0; bottom: 0; width: auto; border-radius: 16px 16px 0 0; border-bottom: 0;
@@ -157,6 +184,13 @@ details > div { display: grid; gap: 12px; padding-top: 8px; }
   </div>
   <div id="busy" hidden>Resonating…</div>
   <div id="pick" hidden></div>
+  <div class="viewbar">
+    <div class="seg" role="group" aria-label="View" id="view-seg">
+      <button data-v="surface" aria-pressed="true">Surface</button><button data-v="xray">X-ray</button><button data-v="underground">Underground</button>
+    </div>
+    <div class="chips" id="layer-chips" role="group" aria-label="Layers"></div>
+    <div class="keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> fly · <kbd>Q</kbd><kbd>E</kbd> down / up · <kbd>Shift</kbd> fast · drag to orbit · scroll to zoom · click anything to inspect · double-click to focus</div>
+  </div>
 
   <aside id="panel" aria-label="Engine controls">
     <div class="sheet-head">
@@ -214,6 +248,24 @@ details > div { display: grid; gap: 12px; padding-top: 8px; }
         <ul class="checks" id="checks"></ul>
       </section>
 
+      <section>
+        <h2>Underground</h2>
+        <div class="stats" id="infra-stats"></div>
+        <div class="slider-row"><label for="pipe-scale">Pipe exaggeration</label><span id="pipe-scale-label">4×</span>
+          <input type="range" id="pipe-scale" min="1" max="14" step="1" value="4"></div>
+        <div class="slider-row"><label for="ground-alpha">Ground opacity</label><span><span id="ground-alpha-label">auto</span> <button id="ground-auto" type="button" style="padding:2px 7px;margin-left:6px">auto</button></span>
+          <input type="range" id="ground-alpha" min="0" max="100" step="1" value="100"></div>
+        <label class="check" for="cut-on"><input type="checkbox" id="cut-on"><span>Section cut: slice the city along a plane and look inside</span></label>
+        <div class="pair">
+          <label class="field" for="cut-axis">Cut axis
+            <select id="cut-axis"><option value="x">East–west (x)</option><option value="z">North–south (z)</option><option value="y">Horizontal (y)</option></select>
+          </label>
+          <div class="slider-row"><label for="cut-pos">Cut position</label><span id="cut-pos-label">0 m</span>
+            <input type="range" id="cut-pos" min="-1000" max="1000" step="1" value="0"></div>
+        </div>
+        <ul class="checks" id="infra-checks"></ul>
+      </section>
+
       <details>
         <summary>Physics and structure</summary>
         <div>
@@ -254,6 +306,7 @@ details > div { display: grid; gap: 12px; padding-top: 8px; }
         <div>
           <p><b>Frequency to pattern.</b> The drive tone shakes a plate. Each plate has natural modes at fixed frequencies: Bessel zeros for the disk membrane (f ∝ j<sub>mn</sub>), m² + n² for the square Chladni plate, √(l(l+1)) for the sphere. The engine sums the modes near your frequency, weighted by a damped resonance of sharpness Q, the way a real driven plate responds.</p>
           <p><b>Pattern to plan.</b> Sand on a Chladni plate settles on the nodal lines, where the plate does not move. Those lines become boulevards. Contour rings follow the amplitude, and gradient streets run from each nodal line up to the crest, so a ring-and-spoke plan grows around every antinode. Amplitude sets density and height; the sign of the wave splits the city into alternating districts.</p>
+          <p><b>Underground.</b> Every building gets a service connection to the nearest street. Sewers run under the streets as a gravity tree toward treatment plants at the edge: each pipe is sized by Manning's equation for its peak flow and laid at the Ten-State minimum slope for its diameter, so runs get deeper downstream until an 8 m limit triggers a lift station. Water mains are looped under every street and fed from elevated tanks, one per 25,000 people, sized for peak hour at 1.5 m/s. A power station feeds substations through 110 kV lines, and 11 kV feeders fan out to every block. Metro tunnels link the district landmarks along the streets, bored below every nearby foundation with 4.5 m of clearance. Lower gravity steepens the sewers and raises the tanks.</p>
           <p><b>Realism rules.</b> Streets aim for UN-Habitat's 18 km of street per km². Every building keeps a setback from every road and sits within walking reach of a street. Heights stay under the material's self-weight limit σ/(ρ·g·3) and a slenderness limit that eases at low gravity. Population assumes 45 m² per resident and 15 m² per worker.</p>
           <p><b>What the frequency does not mean.</b> The standing-wave patterns are real physics; turning them into a city is a design choice. No study shows 432 Hz, Solfeggio tones or the Schumann resonance make a place healthier or more harmonious, so the engine treats every frequency alike. Some Neolithic chambers do resonate near 95–120 Hz; whether that was intended is still debated.</p>
         </div>
@@ -290,8 +343,8 @@ const engineParams = () => {
 // ------------------------------------------------------------ generation (worker when allowed)
 let worker = null, jobId = 0, pendingTimer = 0, layout = null, lastFrameKey = "";
 try {
-  const src = $("engine-src").textContent.replace(/^export /gm, "") +
-    "\nself.onmessage=(e)=>{const{id,p}=e.data;try{const L=generateCity(p);delete L.field;self.postMessage({id,ok:true,L})}catch(err){self.postMessage({id,ok:false,error:String(err&&err.message||err)})}};";
+  const src = $("engine-src").textContent +
+    "\nself.onmessage=(e)=>{const{id,p}=e.data;try{const L=generateCity(p);L.infra=buildInfrastructure(L);delete L.field;delete L.infraToOBJ;self.postMessage({id,ok:true,L})}catch(err){self.postMessage({id,ok:false,error:String(err&&err.message||err)})}};";
   worker = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
   worker.onmessage = (e) => { if (e.data.id === jobId) e.data.ok ? show(e.data.L) : fail(e.data.error); };
   worker.onerror = (ev) => { ev.preventDefault?.(); worker = null; runLocal(jobId); };
@@ -300,7 +353,7 @@ try {
 function runLocal(id) {
   setTimeout(() => {
     if (id !== jobId) return;
-    try { const L = generateCity(engineParams()); delete L.field; show(L); } catch (err) { fail(err.message); }
+    try { const L = generateCity(engineParams()); L.infra = buildInfrastructure(L); delete L.field; show(L); } catch (err) { fail(err.message); }
   }, 30);
 }
 function regenerate(delay = 220) {
@@ -329,6 +382,10 @@ scene.background = NIGHT;
 const camera = new THREE.PerspectiveCamera(45, 1, 1, 100000);
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true; controls.dampingFactor = 0.08;
+controls.zoomSpeed = 1.2;
+renderer.localClippingEnabled = true;
+const cutPlane = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0);
+let allMaterials = [];
 scene.add(new THREE.HemisphereLight(0xd9e2ea, 0x2a2219, 1.15));
 const sun = new THREE.DirectionalLight(0xffe2b8, 2.1); sun.position.set(0.7, 1, 0.45); scene.add(sun);
 const fill = new THREE.DirectionalLight(0x8fb4c8, 0.55); camera.add(fill); fill.position.set(-1, 0.4, 1); scene.add(camera);
@@ -352,7 +409,31 @@ function resize() {
 }
 new ResizeObserver(resize).observe(canvas);
 resize();
-renderer.setAnimationLoop(() => { controls.update(); if (dirty) { dirty = false; renderer.render(scene, camera); } });
+// fly keys: move the camera and its orbit target together along the view axes
+const keys = new Set();
+const typing = () => /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName ?? "");
+window.addEventListener("keydown", (e) => { if (typing()) return; const k = e.key.toLowerCase(); if ("wasdqe".includes(k) || k === "shift") { keys.add(k); e.preventDefault(); } if (e.key === "Escape") clearPick(); });
+window.addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
+window.addEventListener("blur", () => keys.clear());
+let lastT = performance.now();
+renderer.setAnimationLoop((now) => {
+  const dt = Math.min(0.1, (now - lastT) / 1000); lastT = now;
+  if (keys.size) {
+    const speed = Math.max(4, camera.position.distanceTo(controls.target) * 0.9) * (keys.has("shift") ? 3 : 1) * dt;
+    const fwd = new THREE.Vector3(); camera.getWorldDirection(fwd);
+    const up = sphereWorld ? controls.target.clone().normalize() : new THREE.Vector3(0, 1, 0);
+    const right = new THREE.Vector3().crossVectors(fwd, up).normalize();
+    const planar = sphereWorld ? fwd.clone().sub(up.clone().multiplyScalar(fwd.dot(up))).normalize() : new THREE.Vector3(fwd.x, 0, fwd.z).normalize();
+    const mv = new THREE.Vector3();
+    if (keys.has("w")) mv.add(planar); if (keys.has("s")) mv.sub(planar);
+    if (keys.has("d")) mv.add(right); if (keys.has("a")) mv.sub(right);
+    if (keys.has("e")) mv.add(up); if (keys.has("q")) mv.sub(up);
+    if (mv.lengthSq()) { mv.multiplyScalar(speed); camera.position.add(mv); controls.target.add(mv); invalidate(); }
+  }
+  controls.update();
+  if (dirty) { dirty = false; renderer.render(scene, camera); }
+});
+let sphereWorld = false;
 
 const PALETTES = {
   town: { pos: ["#cdb48f", "#e4d3b4"], neg: ["#a9b4b6", "#d0d7d6"], roofPos: "#9c4f35", roofNeg: "#4c5f6b", tree: "#4f7a4a" },
@@ -361,6 +442,34 @@ const PALETTES = {
   alien: { pos: ["#6e3f86", "#e7a7f3"], neg: ["#1c6d68", "#7ff0d6"], tree: "#33d6b6" },
 };
 const ROAD = { boulevard: "#efe2c2", ring: "#b9ac8d", spoke: "#8c8574", wall: "#d3a658" };
+const NET = {
+  sewer: { label: "Sewer", color: "#a8864a", emissive: "#2a1d08" },
+  water: { label: "Water", color: "#3fa7e0", emissive: "#062a44" },
+  power: { label: "Power", color: "#f2c14e", emissive: "#4a3300" },
+  transmission: { label: "Transmission", color: "#ef6a4a", emissive: "#4a1508" },
+  transit: { label: "Metro", color: "#9fb6c8", emissive: "#17232c" },
+  utilidor: { label: "Utility tunnel", color: "#d7cbb0", emissive: "#2a241a" },
+  lateral: { label: "Service", color: "#8c9aa3", emissive: "#121a1f" },
+};
+const LAYERS = [
+  ["buildings", "Buildings", "#e4d3b4"], ["roads", "Streets", "#efe2c2"], ["water", "Water", NET.water.color], ["sewer", "Sewer", NET.sewer.color],
+  ["power", "Power", NET.power.color], ["transit", "Metro", NET.transit.color], ["utilidor", "Utility tunnels", NET.utilidor.color], ["laterals", "Service lines", NET.lateral.color],
+];
+const layerOn = { buildings: true, roads: true, water: true, sewer: true, power: true, transit: true, utilidor: true, laterals: false };
+const layerMeshes = {};
+let viewMode = "surface";
+const mkMat = (opts) => { const m = new THREE.MeshStandardMaterial(opts); allMaterials.push(m); return m; };
+const unitPipe = new THREE.CylinderGeometry(0.5, 0.5, 1, 8);        // along y, centred
+const unitTube = new THREE.CylinderGeometry(0.5, 0.5, 1, 14);
+const unitDisc = new THREE.CylinderGeometry(0.5, 0.5, 1, 12).translate(0, 0.5, 0);
+const unitTank = new THREE.CylinderGeometry(0.5, 0.5, 1, 14).translate(0, 0.5, 0);
+// matrix that maps the unit y-cylinder onto segment A→B with the given radius
+function segMatrix(m, A, B, radius, scaleAlong = 1) {
+  const a = new THREE.Vector3(...A), b = new THREE.Vector3(...B);
+  const dir = b.clone().sub(a), len = dir.length() || 1e-6; dir.divideScalar(len);
+  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+  return m.compose(a.add(b).multiplyScalar(0.5), q, new THREE.Vector3(radius * 2, len * scaleAlong, radius * 2));
+}
 
 function basisMatrix(m, pos, up, fwd, w, h, d, lift = 0) {
   const r = [fwd[1] * up[2] - fwd[2] * up[1], fwd[2] * up[0] - fwd[0] * up[2], fwd[0] * up[1] - fwd[1] * up[0]];
@@ -387,11 +496,13 @@ function disposeWorld() {
     if (o.isInstancedMesh) o.dispose(); // frees the instance matrix and colour buffers on the GPU
   });
   scene.remove(world); world = new THREE.Group(); scene.add(world); pickTargets = [];
+  allMaterials = []; for (const k of Object.keys(layerMeshes)) delete layerMeshes[k];
 }
 
 function show(L) {
   layout = L;
-  $("busy").hidden = true; $("pick").hidden = true;
+  L.infraToOBJ = infraToOBJ; // the worker cannot send functions; the exporter needs this hook
+  $("busy").hidden = true; $("pick").hidden = true; selected = null;
   // paint the plate from the settings this city was built with, not whatever the sliders say now
   const m0 = L.meta;
   const F = fieldPreview({ frequency: m0.frequency, plate: m0.plate, preset: m0.preset, Q: m0.Q, fundamentalHz: m0.fundamentalHz,
@@ -420,13 +531,16 @@ function show(L) {
     gcol.set([tmp.r, tmp.g, tmp.b], i * 3);
   }
   groundGeo.setAttribute("color", new THREE.BufferAttribute(gcol, 3));
-  const ground = new THREE.Mesh(groundGeo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0.05 }));
+  const ground = new THREE.Mesh(groundGeo, mkMat({ vertexColors: true, roughness: 0.95, metalness: 0.05, side: THREE.DoubleSide }));
   if (!sphere) ground.position.y = -0.4;
-  world.add(ground);
+  ground.userData.kind = "ground";
+  world.add(ground); layerMeshes.ground = [ground];
+  sphereWorld = sphere;
 
   // roads
   const m4 = new THREE.Matrix4();
-  const roads = new THREE.InstancedMesh(unitBox, new THREE.MeshStandardMaterial({ roughness: 0.9 }), L.roads.length);
+  const roads = new THREE.InstancedMesh(unitBox, mkMat({ roughness: 0.9 }), L.roads.length);
+  roads.userData = { kind: "road", records: L.roads };
   L.roads.forEach((r, i) => {
     const dx = r.b[0] - r.a[0], dy = r.b[1] - r.a[1], dz = r.b[2] - r.a[2], len = Math.hypot(dx, dy, dz) || 1e-6;
     const mid = [(r.a[0] + r.b[0]) / 2, (r.a[1] + r.b[1]) / 2, (r.a[2] + r.b[2]) / 2];
@@ -439,15 +553,16 @@ function show(L) {
     roads.setMatrixAt(i, m4);
     roads.setColorAt(i, tmp.set(ROAD[r.kind] ?? "#999"));
   });
-  world.add(roads);
+  world.add(roads); pickTargets.push(roads); layerMeshes.roads = [roads];
 
   // buildings, grouped by shape
+  layerMeshes.buildings = [];
   const groups = {};
   L.buildings.forEach((b, i) => { (groups[b.shape] ??= []).push(i); });
   const lo = new THREE.Color(), hi = new THREE.Color();
   const maxH = Math.max(1, L.stats.maxHeight);
   for (const [shape, idx] of Object.entries(groups)) {
-    const mat = new THREE.MeshStandardMaterial({ roughness: style === "alien" ? 0.35 : 0.75, metalness: style === "alien" ? 0.25 : 0.05, flatShading: shape !== "dome" });
+    const mat = mkMat({ roughness: style === "alien" ? 0.35 : 0.75, metalness: style === "alien" ? 0.25 : 0.05, flatShading: shape !== "dome" });
     if (style === "alien") { mat.emissive = new THREE.Color("#140b1c"); }
     const mesh = new THREE.InstancedMesh(GEOM[shape] ?? unitBox, mat, idx.length);
     idx.forEach((bi, j) => {
@@ -461,29 +576,29 @@ function show(L) {
       if (b.landmark) tmp.lerp(new THREE.Color("#ffd27a"), 0.55);
       mesh.setColorAt(j, tmp);
     });
-    mesh.userData.index = idx;
-    world.add(mesh); pickTargets.push(mesh);
+    mesh.userData = { kind: "building", index: idx, records: L.buildings };
+    world.add(mesh); pickTargets.push(mesh); layerMeshes.buildings.push(mesh);
   }
   // pitched roofs for town houses, crowns for landmarks
   const houses = groups.house ?? [];
   if (houses.length) {
-    const roof = new THREE.InstancedMesh(unitRoof, new THREE.MeshStandardMaterial({ roughness: 0.8, flatShading: true }), houses.length);
+    const roof = new THREE.InstancedMesh(unitRoof, mkMat({ roughness: 0.8, flatShading: true }), houses.length);
     houses.forEach((bi, j) => {
       const b = L.buildings[bi];
       basisMatrix(m4, b.pos, b.up, b.fwd, b.w, Math.min(b.w, b.d) * 0.45, b.d, b.h);
       roof.setMatrixAt(j, m4); roof.setColorAt(j, tmp.set(b.polarity >= 0 ? pal.roofPos : pal.roofNeg));
     });
-    world.add(roof);
+    world.add(roof); layerMeshes.buildings.push(roof);
   }
   const marks = L.buildings.filter((b) => b.landmark && b.shape !== "spire" && b.shape !== "dome");
   if (marks.length) {
-    const crown = new THREE.InstancedMesh(unitCone, new THREE.MeshStandardMaterial({ color: "#d3a658", emissive: "#5c3d0c", metalness: 0.6, roughness: 0.35 }), marks.length);
+    const crown = new THREE.InstancedMesh(unitCone, mkMat({ color: "#d3a658", emissive: "#5c3d0c", metalness: 0.6, roughness: 0.35 }), marks.length);
     marks.forEach((b, j) => { const s = Math.min(b.w, b.d) * 0.5; basisMatrix(m4, b.pos, b.up, b.fwd, s, Math.max(6, b.h * 0.14), s, b.h); crown.setMatrixAt(j, m4); });
-    world.add(crown);
+    world.add(crown); layerMeshes.buildings.push(crown);
   }
   // trees
   if (L.trees.length) {
-    const tr = new THREE.InstancedMesh(unitTree, new THREE.MeshStandardMaterial({ color: pal.tree, roughness: 0.9, flatShading: true, emissive: style === "alien" ? "#06302a" : "#000000" }), L.trees.length);
+    const tr = new THREE.InstancedMesh(unitTree, mkMat({ color: pal.tree, roughness: 0.9, flatShading: true, emissive: style === "alien" ? "#06302a" : "#000000" }), L.trees.length);
     const base = PRESETS[L.meta.preset].lot * 0.22;
     const any = [1, 0, 0];
     L.trees.forEach((t, j) => {
@@ -491,8 +606,10 @@ function show(L) {
       basisMatrix(m4, t.pos, t.up, f, base * t.s, base * 1.8 * t.s, base * t.s);
       tr.setMatrixAt(j, m4);
     });
-    world.add(tr);
+    world.add(tr); layerMeshes.buildings.push(tr);
   }
+
+  showNetworks(L);
 
   // frame the camera when the plate or scale changed
   const frameKey = `${L.meta.plate}|${L.meta.preset}`;
@@ -501,17 +618,112 @@ function show(L) {
     const E = F.extent + (sphere ? 0.5 : 0.45) * L.stats.maxHeight;
     // pull back on portrait screens so the whole plate fits the width
     const k = camera.aspect < 1 ? Math.pow(1 / camera.aspect, 0.85) : 1;
-    if (sphere) { camera.position.set(E * 1.6 * k, E * 1.5 * k, E * 2.2 * k); controls.minDistance = E * 1.05; controls.maxDistance = E * 10; }
-    else { camera.position.set(E * 0.12 * k, E * 1.2 * k, E * 1.65 * k); controls.minDistance = 40; controls.maxDistance = E * 8; }
+    if (sphere) { camera.position.set(E * 1.6 * k, E * 1.5 * k, E * 2.2 * k); controls.maxDistance = E * 10; }
+    else { camera.position.set(E * 0.12 * k, E * 1.2 * k, E * 1.65 * k); controls.maxDistance = E * 8; }
+    controls.minDistance = 2;
     controls.target.set(0, 0, 0);
     camera.far = E * 30; camera.updateProjectionMatrix();
-    controls.maxPolarAngle = sphere ? Math.PI : Math.PI * 0.49;
     scene.fog = sphere ? null : new THREE.Fog(NIGHT, E * 3, E * 7);
+    const cut = $("cut-pos"); cut.min = -Math.round(F.extent); cut.max = Math.round(F.extent); cut.value = 0;
   }
+  updateCut(); // new materials need the clipping plane re-applied
+  applyView();
   drawFigure(F);
   updatePanel(L);
   invalidate();
 }
+
+// ------------------------------------------------------------ underground networks
+function pipeScale() { return +$("pipe-scale").value; }
+function showNetworks(L) {
+  const I = L.infra; if (!I) return;
+  const nodes = I.graph.nodes;
+  const m4 = new THREE.Matrix4(), tmp = new THREE.Color();
+  const under = (P, depth) => underground(L, P, depth);
+  const px = pipeScale();
+  const add = (layer, mesh, kind, records) => { mesh.userData = { kind, records }; world.add(mesh); pickTargets.push(mesh); (layerMeshes[layer] ??= []).push(mesh); };
+  const pipes = (layer, kind, records, radiusOf, depthA, depthB, geom = unitPipe) => {
+    if (!records.length) return;
+    const mesh = new THREE.InstancedMesh(geom, mkMat({ color: NET[kind].color, emissive: NET[kind].emissive, roughness: 0.55, metalness: 0.15 }), records.length);
+    records.forEach((r, i) => { mesh.setMatrixAt(i, segMatrix(m4, under(nodes[r.a ?? r.up].pos, depthA(r)), under(nodes[r.b ?? r.down].pos, depthB(r)), radiusOf(r), 1.02)); });
+    add(layer, mesh, kind, records);
+  };
+  // pipes: diameters exaggerated for visibility, depths true
+  pipes("sewer", "sewer", I.sewer.pipes, (p) => Math.max(0.35, p.diameter * px) / 2, (p) => p.upDepth, (p) => p.downDepth);
+  pipes("water", "water", I.water.mains, (m) => Math.max(0.3, m.diameter * px) / 2, (m) => m.depth, (m) => m.depth);
+  pipes("power", "power", I.power.feeders, (f) => Math.max(0.25, 0.06 * px * Math.sqrt(f.classMVA / 4)) / 2, (f) => f.depth, (f) => f.depth);
+  pipes("power", "transmission", I.power.transmission, () => Math.max(0.4, 0.14 * px) / 2, (f) => f.depth, (f) => f.depth);
+  pipes("transit", "transit", I.transit.tunnels, (t) => t.diameter / 2, (t) => t.depth, (t) => t.depth, unitTube);
+  pipes("utilidor", "utilidor", I.utilidors, (u) => u.width / 2, (u) => u.depth, (u) => u.depth, unitBox.clone().translate(0, -0.5, 0));
+  // service connections: from the building to its street node, just under the surface
+  if (I.laterals.length) {
+    const lat = new THREE.InstancedMesh(unitPipe, mkMat({ color: NET.lateral.color, emissive: NET.lateral.emissive, roughness: 0.7 }), I.laterals.length);
+    I.laterals.forEach((l, i) => lat.setMatrixAt(i, segMatrix(m4, under(L.buildings[l.building].pos, 1.0), under(nodes[l.node].pos, 1.0), Math.max(0.15, 0.04 * px))));
+    add("laterals", lat, "lateral", I.laterals);
+  }
+  // structures
+  const struct = (layer, kind, records, geom, color, size, depthOf = () => 0) => {
+    if (!records.length) return;
+    const mesh = new THREE.InstancedMesh(geom, mkMat({ color, emissive: new THREE.Color(color).multiplyScalar(0.25), roughness: 0.5, metalness: 0.3 }), records.length);
+    records.forEach((r, i) => {
+      const P = under(r.pos, depthOf(r)), up = L.meta.plate === "sphere" ? norm3(P) : [0, 1, 0];
+      const f = norm3(cross(up, Math.abs(up[0]) < 0.9 ? [1, 0, 0] : [0, 0, 1]));
+      const [w, h, d] = size(r);
+      basisMatrix(m4, P, up, f, w, h, d); mesh.setMatrixAt(i, m4);
+    });
+    add(layer, mesh, kind, records);
+  };
+  const lot = PRESETS[L.meta.preset].lot;
+  struct("sewer", "treatment", I.sewer.plants, unitBox, "#7a6a3e", (p) => [lot * 2.2, 6, lot * 1.6]);
+  struct("sewer", "lift", I.sewer.liftStations, unitDisc, "#c9a45c", (l) => [3.5, l.fromDepth, 3.5], (l) => l.fromDepth);
+  struct("sewer", "manhole", I.sewer.manholes.length < 25000 ? I.sewer.manholes : [], unitDisc, "#6f6250", (m) => [1.2, m.depth, 1.2], (m) => m.depth);
+  struct("water", "tower", I.water.towers, unitTank, "#4fb5ea", (t) => [Math.max(8, Math.cbrt(t.storageM3) * 0.9), t.height, Math.max(8, Math.cbrt(t.storageM3) * 0.9)]);
+  struct("water", "waterplant", [I.water.plant], unitBox, "#2f86b5", () => [lot * 2, 7, lot * 1.4]);
+  struct("power", "plant", I.power.plants, unitBox, "#d7593a", (p) => [lot * 2.4, Math.max(14, Math.cbrt(p.capacityMW) * 4), lot * 1.8]);
+  struct("power", "substation", I.power.substations, unitBox, "#e8b84a", (s) => [12 + 4 * s.banks, 5, 10]);
+  struct("transit", "station", I.transit.stations, unitBox, "#c7d6e2", () => [TRANSIT.stationLength, 9, TRANSIT.stationWidth], (st) => st.depth + 4.5);
+}
+
+// which layers and how translucent, per view mode
+function applyView() {
+  const under = viewMode === "underground", xray = viewMode === "xray";
+  const auto = $("ground-alpha").value === "100" && !$("ground-alpha").dataset.touched;
+  const groundAlpha = auto ? (under ? 0.12 : xray ? 0.4 : 1) : +$("ground-alpha").value / 100;
+  $("ground-alpha-label").textContent = auto ? `auto (${Math.round(groundAlpha * 100)}%)` : `${Math.round(groundAlpha * 100)}%`;
+  const setAlpha = (meshes, a) => { for (const m of meshes ?? []) { m.material.transparent = a < 1; m.material.opacity = a; m.material.depthWrite = a >= 0.5; m.material.needsUpdate = true; } };
+  setAlpha(layerMeshes.ground, groundAlpha);
+  setAlpha(layerMeshes.buildings, under ? 0.16 : xray ? 0.45 : 1);
+  setAlpha(layerMeshes.roads, under ? 0.35 : 1);
+  for (const [key] of LAYERS) {
+    const netLayer = !["buildings", "roads"].includes(key);
+    const visible = layerOn[key] && (!netLayer || under || xray);
+    for (const m of layerMeshes[key] ?? []) m.visible = visible || (netLayer && !under && !xray && m.userData.kind && ["treatment", "tower", "waterplant", "plant", "substation"].includes(m.userData.kind) && layerOn[key]);
+  }
+  controls.maxPolarAngle = under || xray || sphereWorld ? Math.PI : Math.PI * 0.49;
+  for (const b of $("view-seg").children) b.setAttribute("aria-pressed", String(b.dataset.v === viewMode));
+  invalidate();
+}
+$("view-seg").addEventListener("click", (e) => { const v = e.target.closest("button")?.dataset.v; if (v) { viewMode = v; applyView(); } });
+$("layer-chips").replaceChildren(...LAYERS.map(([key, label, color]) => {
+  const b = document.createElement("button"); b.className = "chip"; b.style.setProperty("--c", color); b.dataset.layer = key;
+  b.setAttribute("aria-pressed", String(layerOn[key]));
+  const i = document.createElement("i"); b.append(i, document.createTextNode(label));
+  b.addEventListener("click", () => { layerOn[key] = !layerOn[key]; b.setAttribute("aria-pressed", String(layerOn[key])); if (layerOn[key] && !["buildings", "roads"].includes(key) && viewMode === "surface") { viewMode = "xray"; } applyView(); });
+  return b;
+}));
+$("pipe-scale").addEventListener("input", () => { $("pipe-scale-label").textContent = `${pipeScale()}×`; });
+$("pipe-scale").addEventListener("change", () => { if (layout) show(layout); });
+$("ground-alpha").addEventListener("input", (e) => { e.target.dataset.touched = "1"; applyView(); });
+$("ground-auto").addEventListener("click", () => { const g = $("ground-alpha"); g.value = 100; delete g.dataset.touched; applyView(); });
+function updateCut() {
+  const on = $("cut-on").checked, axis = $("cut-axis").value, pos = +$("cut-pos").value;
+  $("cut-pos-label").textContent = `${pos} m`;
+  const n = axis === "x" ? new THREE.Vector3(-1, 0, 0) : axis === "z" ? new THREE.Vector3(0, 0, -1) : new THREE.Vector3(0, -1, 0);
+  cutPlane.normal.copy(n); cutPlane.constant = pos;
+  for (const m of allMaterials) { m.clippingPlanes = on ? [cutPlane] : []; m.clipShadows = false; m.needsUpdate = true; }
+  invalidate();
+}
+for (const id of ["cut-on", "cut-axis", "cut-pos"]) $(id).addEventListener("input", updateCut);
 
 // ------------------------------------------------------------ 2D sand figure
 function drawFigure(F) {
@@ -587,6 +799,25 @@ function updatePanel(L) {
     const basis = document.createElement("span"); basis.className = "basis"; basis.textContent = c.basis;
     li.append(pill, label, val, basis); return li;
   }));
+  const I = L.infra;
+  if (I) {
+    const u = I.stats;
+    const istats = [
+      ["Sewers", `${u.sewerKm.toFixed(0)} km`], ["Lift stations", u.liftStations],
+      ["Water mains", `${u.waterKm.toFixed(0)} km`], ["Water tanks", `${u.towers} × ${u.towerHeight.toFixed(0)} m`],
+      ["Peak power", `${u.peakMW.toFixed(0)} MW`], ["Substations", u.substations],
+      ["Metro", u.stations ? `${u.transitKm.toFixed(1)} km · ${u.stations} st.` : "none"], ["Excavation", `${(u.excavationM3 / 1e6).toFixed(2)} M m³`],
+    ];
+    $("infra-stats").replaceChildren(...istats.map(([k, v]) => { const d = document.createElement("div"); d.className = "stat"; const a = document.createElement("span"); a.textContent = k; const b = document.createElement("b"); b.textContent = v; d.append(a, b); return d; }));
+    $("infra-checks").replaceChildren(...I.checks.map((c) => {
+      const li = document.createElement("li");
+      const pill = document.createElement("span"); pill.className = `pill ${c.status}`; pill.textContent = c.status === "pass" ? "ok" : c.status;
+      const label = document.createElement("span"); label.textContent = c.label;
+      const val = document.createElement("span"); val.className = "val"; val.textContent = c.value;
+      const basis = document.createElement("span"); basis.className = "basis"; basis.textContent = c.basis;
+      li.append(pill, label, val, basis); return li;
+    }));
+  }
   const mat = MATERIALS[m.material];
   $("limits").textContent = `${mat.label}: self-weight limit ${Math.round(s.heightLimit)} m at ${m.gravity} g; slenderness up to 1:${Number.isFinite(s.slendernessLimit) ? s.slendernessLimit.toFixed(1) : "—"}. ` +
     `Capped: ${s.binding.slenderness} by slenderness, ${s.binding.core} by lift-core width, ${s.binding.material} by material.` +
@@ -642,26 +873,94 @@ $("sheet-toggle").addEventListener("click", () => {
   resize();
 });
 
-// tap a building for its details
-let downAt = null;
+// click anything to inspect it; double-click to focus the camera on it
+let downAt = null, selected = null, lastClick = 0;
+const fmt = (x, d = 1) => (Number.isFinite(x) ? x.toFixed(d) : "—");
+function describe(kind, r, L) {
+  const nodes = L.infra?.graph.nodes;
+  const g = L.meta.gravity;
+  switch (kind) {
+    case "building": {
+      const zone = { core: "Core (antinode crest)", mixed: "Mixed use", residential: "Residential", green: "Green" }[r.zone];
+      const lat = L.infra?.laterals.find((l) => L.buildings[l.building] === r);
+      return { title: `${r.landmark ? "Landmark · " : ""}${zone}`, color: "#e4d3b4", pos: r.pos, size: Math.max(r.w, r.d, r.h), rows: [
+        ["Height", `${fmt(r.h, 0)} m`], ["Floors", r.floors], ["Footprint", `${fmt(r.w, 0)} × ${fmt(r.d, 0)} m`], ["Slenderness", `1:${fmt(r.h / Math.min(r.w, r.d))}`],
+        ["Foundations", `${fmt(foundationDepth(r))} m deep`], ["Amplitude", fmt(r.amp, 2)], ["Phase", r.polarity > 0 ? "+" : "−"],
+        ...(lat ? [["Residents", Math.round(lat.residents)], ["Jobs", Math.round(lat.jobs)], ["Service line", `${fmt(lat.length, 0)} m to street node ${lat.node}`]] : []),
+      ] };
+    }
+    case "road": return { title: `${r.kind[0].toUpperCase()}${r.kind.slice(1)} street`, color: ROAD[r.kind], pos: r.a, size: r.w * 4, rows: [["Width", `${fmt(r.w)} m`], ["Segment", `${fmt(dist3(r.a, r.b))} m`]] };
+    case "sewer": return { title: r.forceMain ? "Force main (pumped)" : "Gravity sewer", color: NET.sewer.color, pos: nodes[r.up].pos, depth: r.upDepth, size: 20, rows: [
+      ["Diameter", `${Math.round(r.diameter * 1000)} mm`], ["Slope", `${(r.slope * 100).toFixed(2)} % (min ${(sewerMinSlope(r.diameter, g) * 100).toFixed(2)} %)`],
+      ["Depth", `${fmt(r.upDepth)} → ${fmt(r.downDepth)} m`], ["Peak flow", `${fmt(r.flow * 1000)} L/s`], ["Average", `${fmt(r.avgFlow * 86400, 0)} m³/day`],
+      ["Length", `${fmt(r.length)} m`], ["Flows to", `node ${r.down}${r.lift ? " via lift station" : ""}`], ["Outfall", `treatment plant ${r.plant + 1}`] ] };
+    case "water": return { title: { trunk: "Trunk main", distribution: "Distribution main", loop: "Loop main" }[r.kind], color: NET.water.color, pos: nodes[r.a].pos, depth: r.depth, size: 20, rows: [
+      ["Diameter", `${Math.round(r.diameter * 1000)} mm`], ["Peak flow", r.flow > 0 ? `${fmt(r.flow * 1000)} L/s` : "loop (not modelled)"], ["Velocity", r.flow > 0 ? `${fmt(r.velocity, 2)} m/s` : "—"],
+      ["Depth", `${fmt(r.depth)} m`], ["Length", `${fmt(r.length)} m`], ["Pressure zone", r.zone >= 0 ? `tank ${r.zone + 1}` : "—"] ] };
+    case "power": return { title: `${r.kV} kV feeder`, color: NET.power.color, pos: nodes[r.a].pos, depth: r.depth, size: 20, rows: [
+      ["Load", `${fmt(r.loadMVA, 2)} MVA`], ["Cable class", `${r.classMVA} MVA`], ["Depth", `${fmt(r.depth)} m`], ["Length", `${fmt(r.length)} m`], ["Substation", `${r.substation + 1}`] ] };
+    case "transmission": return { title: `${r.kV} kV transmission`, color: NET.transmission.color, pos: nodes[r.a].pos, depth: r.depth, size: 20, rows: [["Depth", `${fmt(r.depth)} m`], ["Length", `${fmt(r.length)} m`], ["Type", "underground cable"]] };
+    case "transit": return { title: `Metro tunnel (line ${r.line})`, color: NET.transit.color, pos: nodes[r.a].pos, depth: r.depth, size: 40, rows: [
+      ["Bore", `${fmt(r.diameter)} m`], ["Depth to axis", `${fmt(r.depth)} m`], ["Length", `${fmt(r.length)} m`], ["Foundations crossed", r.nearBuildings.length],
+      ["Clearance", r.nearBuildings.length ? `${fmt(Math.min(...r.nearBuildings.map((bi) => r.depth - r.diameter / 2 - foundationDepth(L.buildings[bi]))))} m` : "open ground"] ] };
+    case "utilidor": return { title: "Utility tunnel", color: NET.utilidor.color, pos: nodes[r.a].pos, depth: r.depth, size: 20, rows: [["Section", `${r.width} × ${r.height} m`], ["Depth", `${r.depth} m`], ["Carries", r.carries.join(", ")], ["Length", `${fmt(r.length)} m`]] };
+    case "lateral": return { title: "Service connection", color: NET.lateral.color, pos: L.buildings[r.building].pos, size: 15, rows: [["Length", `${fmt(r.length)} m`], ["Street node", r.node], ["Serves", `${Math.round(r.residents)} residents, ${Math.round(r.jobs)} jobs`]] };
+    case "treatment": return { title: "Wastewater treatment plant", color: "#c9a45c", pos: r.pos, size: 60, rows: [["Inflow", `${fmt(r.flowM3Day, 0)} m³/day`], ["Serves", `${r.served.toLocaleString("en-US")} people`], ["Inlet depth", `${fmt(r.depth)} m`]] };
+    case "lift": return { title: "Sewage lift station", color: "#c9a45c", pos: r.pos, depth: r.fromDepth / 2, size: 15, rows: [["Lifts from", `${fmt(r.fromDepth)} m to ${SEWER.minCover} m`], ["Peak flow", `${fmt(r.flow * 1000)} L/s`], ["Why", `gravity run would pass ${SEWER.maxDepth} m`]] };
+    case "manhole": return { title: "Manhole", color: "#9f8f70", pos: r.pos, depth: r.depth / 2, size: 10, rows: [["Invert depth", `${fmt(r.depth)} m`], ["Node", r.node]] };
+    case "tower": return { title: "Elevated water tank", color: NET.water.color, pos: r.pos, size: r.height * 1.5, rows: [["Height", `${fmt(r.height, 0)} m${r.pumped ? " + pumps" : ""}`], ["Storage", `${fmt(r.storageM3, 0)} m³ (one day)`], ["Serves", `${r.served.toLocaleString("en-US")} people`], ["Demand", `${fmt(r.demandM3Day, 0)} m³/day`]] };
+    case "waterplant": return { title: "Water treatment plant", color: NET.water.color, pos: r.pos, size: 60, rows: [["Capacity", `${fmt(r.capacityM3Day, 0)} m³/day (max day)`]] };
+    case "plant": return { title: r.kind === "core reactor" ? "Core reactor" : "Power station", color: NET.transmission.color, pos: r.pos, size: 80, rows: [["Capacity", `${r.capacityMW} MW`], ["City peak", `${fmt(L.infra.power.peakMW, 0)} MW`]] };
+    case "substation": return { title: `Substation ${r.kV} kV`, color: NET.power.color, pos: r.pos, size: 30, rows: [["Load", `${fmt(r.loadMVA)} of ${r.ratingMVA} MVA (${Math.round((100 * r.loadMVA) / r.ratingMVA)} %)`], ["Transformers", r.banks]] };
+    case "station": return { title: r.name, color: NET.transit.color, pos: r.pos, depth: r.depth, size: 120, rows: [["Platform depth", `${fmt(r.depth)} m`], ["Box", `${TRANSIT.stationLength} × ${TRANSIT.stationWidth} m`], ["District", r.district]] };
+    default: return { title: kind, color: "#fff", pos: r.pos ?? [0, 0, 0], size: 20, rows: [] };
+  }
+}
+const dist3 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+function clearPick() {
+  if (selected) { if (selected.color) { selected.mesh.setColorAt(selected.id, selected.color); selected.mesh.instanceColor.needsUpdate = true; } selected = null; invalidate(); }
+  $("pick").hidden = true;
+}
+function focusOn(pos, size) {
+  const target = new THREE.Vector3(...pos);
+  const dir = camera.position.clone().sub(controls.target).normalize();
+  controls.target.copy(target);
+  camera.position.copy(target.clone().add(dir.multiplyScalar(Math.max(12, size * 2.5))));
+  invalidate();
+}
 canvas.addEventListener("pointerdown", (e) => { downAt = [e.clientX, e.clientY]; });
 canvas.addEventListener("pointerup", (e) => {
   if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 6 || !layout) return;
   const r = canvas.getBoundingClientRect();
   const ray = new THREE.Raycaster();
   ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
-  const hit = ray.intersectObjects(pickTargets, false)[0];
-  const box = $("pick");
-  if (!hit || hit.instanceId == null) { box.hidden = true; return; }
-  const b = layout.buildings[hit.object.userData.index[hit.instanceId]];
-  const zone = { core: "Core (antinode crest)", mixed: "Mixed use", residential: "Residential", green: "Green" }[b.zone];
-  const rows = [["Height", `${b.h.toFixed(0)} m`], ["Floors", b.floors], ["Footprint", `${b.w.toFixed(0)} × ${b.d.toFixed(0)} m`],
-    ["Slenderness", `1:${(b.h / Math.min(b.w, b.d)).toFixed(1)}`], ["Amplitude", b.amp.toFixed(2)], ["Phase", b.polarity > 0 ? "+" : "−"]];
-  box.replaceChildren();
-  const t = document.createElement("b"); t.textContent = `${b.landmark ? "Landmark · " : ""}${zone}`;
+  const hits = ray.intersectObjects(pickTargets.filter((m) => m.visible), false)
+    .filter((h) => h.instanceId != null && (!$("cut-on").checked || cutPlane.distanceToPoint(h.point) >= 0));
+  // ghosted buildings and streets do not block clicks on the pipes beneath them
+  const hit = hits.find((h) => h.object.material.opacity >= 0.5) ?? hits[0];
+  const dbl = performance.now() - lastClick < 350; lastClick = performance.now();
+  clearPick();
+  if (!hit) return;
+  const mesh = hit.object, ud = mesh.userData;
+  const rec = ud.index ? ud.records[ud.index[hit.instanceId]] : ud.records[hit.instanceId];
+  const d = describe(ud.kind, rec, layout);
+  const prev = new THREE.Color();
+  if (!mesh.instanceColor) { const w = new THREE.Color(1, 1, 1); for (let i = 0; i < mesh.count; i++) mesh.setColorAt(i, w); } // white keeps the material colour
+  mesh.getColorAt(hit.instanceId, prev); mesh.setColorAt(hit.instanceId, new THREE.Color("#fff1c2")); mesh.instanceColor.needsUpdate = true;
+  selected = { mesh, id: hit.instanceId, color: prev };
+  const box = $("pick"); box.replaceChildren(); box.style.setProperty("--c", d.color);
+  const kindEl = document.createElement("div"); kindEl.className = "kind"; kindEl.textContent = ud.kind.replace("waterplant", "water plant");
+  const t = document.createElement("b"); t.textContent = d.title;
   const dl = document.createElement("dl");
-  for (const [k, v] of rows) { const dt = document.createElement("dt"); dt.textContent = k; const dd = document.createElement("dd"); dd.textContent = v; dl.append(dt, dd); }
-  box.append(t, dl); box.hidden = false;
+  for (const [k, v] of d.rows) { const dt = document.createElement("dt"); dt.textContent = k; const dd = document.createElement("dd"); dd.textContent = v; dl.append(dt, dd); }
+  const actions = document.createElement("div"); actions.className = "pick-actions";
+  const fpos = d.depth ? underground(layout, d.pos, d.depth) : d.pos;
+  const focus = document.createElement("button"); focus.textContent = "Focus"; focus.addEventListener("click", () => focusOn(fpos, d.size));
+  const close = document.createElement("button"); close.textContent = "Close"; close.addEventListener("click", clearPick);
+  actions.append(focus, close);
+  box.append(kindEl, t, dl, actions); box.hidden = false;
+  if (dbl) focusOn(fpos, d.size);
+  invalidate();
 });
 
 // drive tone
@@ -711,8 +1010,8 @@ $("save-model").addEventListener("click", () => {
     `Frequency: ${m.frequency} Hz (${m.note}) on a ${m.plateLabel.toLowerCase()}`, `Settlement: ${m.presetLabel}, seed ${m.seed}, Q ${m.Q}, gravity ${m.gravity} g, ${m.materialLabel}`,
     `Dominant mode: ${m.dominant} (${m.symmetry})`, ``,
     `${s.buildings} buildings, ${s.roadLengthKm.toFixed(1)} km of streets, about ${s.population} residents and ${s.jobs} jobs.`, ``,
-    `city.obj: Wavefront OBJ in metres, y up. One object per building (prisms) and per road segment (flat strips).`,
-    `layout.json: every road segment, building (position, up, forward, width, depth, height, floors, zone, phase) and tree, plus stats and checks.`,
+    `city.obj: Wavefront OBJ in metres, y up. One object per building (prisms) and per road segment (flat strips); the networks follow as line objects (sewer_pipes, water_mains, power_feeders, power_transmission, transit_tunnels, utility_tunnels) at their true depths.`,
+    `layout.json: every road segment, building (position, up, forward, width, depth, height, floors, zone, phase) and tree, plus stats and checks, and "infra": the street graph (nodes, edges), service laterals, sewer pipes (diameter, slope, depths, flow), lift stations, treatment plants, water mains and tanks, power plant, substations, feeders and transmission, metro stations and tunnels, utility tunnels.`,
     `Same settings + same seed reproduce this layout exactly.`].join("\n");
   const zip = zipStore([{ name: "city.obj", text: toOBJ(layout) }, { name: "layout.json", text: toJSON(layout) }, { name: "README.txt", text: readme }]);
   offer(`${baseName()}.zip`, new Blob([zip]));
@@ -723,5 +1022,7 @@ $("save-png").addEventListener("click", () => {
   canvas.toBlob((blob) => blob ? offer(`${baseName()}.png`, blob) : ($("status").textContent = "The image could not be captured."), "image/png");
 });
 
+// small debugging hook: window.cymatic.layout / camera / controls
+window.cymatic = { get layout() { return layout; }, camera, controls, invalidate, focusOn };
 regenerate(0);
 </script>

@@ -1173,7 +1173,7 @@ export function toJSON(layout) {
     const { graph, ...infra } = rest.infra;
     rest.infra = { ...infra, graph: { nodes: graph.nodes, edges: graph.edges, connectors: graph.connectors } };
   }
-  return JSON.stringify(rest);
+  return JSON.stringify(rest, (k, v) => (ArrayBuffer.isView(v) ? Array.from(v) : v));
 }
 
 // Field only (no city) — for painting the plate under the city and the 2D sand figure.

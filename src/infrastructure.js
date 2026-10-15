@@ -52,7 +52,7 @@ export const WATER = {
 export const POWER = {
   kWPerResident: 0.7, kWPerJob: 1.0, peakFactor: 1.6, powerFactor: 0.9,   // ≈1.2 kW per resident all-in at peak
   substationMVA: { town: 30, city: 60, megastructure: 120, alien: 90 },
-  loadingLimit: 0.75,     // plan substations to 75 % of rating
+  loadingLimit: 0.75,     // initial substation count assumes 75 % loading; zones split only when a rating is exceeded
   cableDepth: 0.9, transmissionDepth: 1.5,
   feederClassesMVA: [2, 4, 8, 12, 20, 30, 40, 60],
   transmissionKV: 110, distributionKV: 11,
@@ -182,6 +182,54 @@ export function buildStreetGraph(layout) {
     for (const [, ni] of splits) { pushEdge(prev, ni, e.kind, e.w); prev = ni; }
     pushEdge(prev, e.b, e.kind, e.w);
   }
+  // junctions where streets cross without sharing a node (spokes across rings, spokes across spokes)
+  {
+    const sphere = layout.meta.plate === 'sphere', Rs = layout.meta.world.Rs;
+    const cell = 40, ehash = new Map();
+    const ekey = (x, z, y) => `${x},${y},${z}`;
+    const cellsOf = (e) => {
+      const A = nodes[e.a].pos, B = nodes[e.b].pos, out = [];
+      const x0 = Math.floor(Math.min(A[0], B[0]) / cell), x1 = Math.floor(Math.max(A[0], B[0]) / cell);
+      const z0 = Math.floor(Math.min(A[2], B[2]) / cell), z1 = Math.floor(Math.max(A[2], B[2]) / cell);
+      const y0 = sphere ? Math.floor(Math.min(A[1], B[1]) / cell) : 0, y1 = sphere ? Math.floor(Math.max(A[1], B[1]) / cell) : 0;
+      for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) for (let y = y0; y <= y1; y++) out.push(ekey(x, z, y));
+      return out;
+    };
+    edges.forEach((e, i) => { for (const k of cellsOf(e)) (ehash.get(k) ?? ehash.set(k, []).get(k)).push(i); });
+    const splits = edges.map(() => []);
+    const tested = new Set();
+    for (let i = 0; i < edges.length; i++) {
+      const e = edges[i];
+      for (const k of cellsOf(e)) for (const j of ehash.get(k)) {
+        if (j <= i) continue;
+        const pk = i * edges.length + j; if (tested.has(pk)) continue; tested.add(pk);
+        const f = edges[j];
+        if (e.a === f.a || e.a === f.b || e.b === f.a || e.b === f.b) continue;
+        // closest approach of the two segments; a crossing has interior parameters and near-zero gap
+        const P = nodes[e.a].pos, Q = nodes[f.a].pos, u = sub(nodes[e.b].pos, P), v = sub(nodes[f.b].pos, Q), w = sub(P, Q);
+        const a = u[0] * u[0] + u[1] * u[1] + u[2] * u[2], b = u[0] * v[0] + u[1] * v[1] + u[2] * v[2], c = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+        const d = u[0] * w[0] + u[1] * w[1] + u[2] * w[2], g2 = v[0] * w[0] + v[1] * w[1] + v[2] * w[2], den = a * c - b * b;
+        if (den < 1e-9) continue;
+        const t = (b * g2 - c * d) / den, r = (a * g2 - b * d) / den;
+        if (t <= 0.03 || t >= 0.97 || r <= 0.03 || r >= 0.97) continue;
+        const X = add(P, scale3(u, t)), Y = add(Q, scale3(v, r));
+        if (dist(X, Y) > 1.0) continue;
+        let M = scale3(add(X, Y), 0.5);
+        if (sphere) M = scale3(norm3(M), Rs);
+        const id = nodes.length; nodes.push({ pos: M, deg: 0 });
+        splits[i].push([t, id]); splits[j].push([r, id]);
+      }
+    }
+    if (splits.some((x) => x.length)) {
+      const old = edges.splice(0, edges.length); seen.clear();
+      old.forEach((e, i) => {
+        const sp = splits[i].sort((x, y) => x[0] - y[0]);
+        let prev = e.a;
+        for (const [, id] of sp) { pushEdge(prev, id, e.kind, e.w); prev = id; }
+        pushEdge(prev, e.b, e.kind, e.w);
+      });
+    }
+  }
   // connect stray components to the main one with short service roads
   const comp = new Int32Array(nodes.length).fill(-1); let nc = 0;
   const adj = nodes.map(() => []);
@@ -215,7 +263,7 @@ export function buildStreetGraph(layout) {
       const i = members[c].reduce((m, k) => (dist(nodes[k].pos, nodes[j].pos) < dist(nodes[m].pos, nodes[j].pos) ? k : m), members[c][0]);
       bestPair = [i, j, dist(nodes[i].pos, nodes[j].pos)];
     }
-    pushEdge(bestPair[0], bestPair[1], 'service', 4); connectors++;
+    pushEdge(bestPair[0], bestPair[1], layout.meta.preset === 'megastructure' ? 'corridor' : 'service', 4); connectors++;
   }
   const adj2 = nodes.map(() => []);
   edges.forEach((e, i) => { adj2[e.a].push(i); adj2[e.b].push(i); nodes[e.a].deg++; nodes[e.b].deg++; });
@@ -278,21 +326,26 @@ export function buildInfrastructure(layout) {
       for (const cand of SEWER.diameters) { if (cand < D) continue; D = cand; if (sewerCapacity(cand, sewerMinSlope(cand, g), g) >= peak) break; }
       const slope = sewerMinSlope(D, g);
       let upDepth = Math.max(SEWER.minCover, nodeDepth[u]);
-      let lift = false;
-      if (upDepth + slope * e.len > SEWER.maxDepth) { lift = true; upDepth = SEWER.minCover; liftStations.push({ node: u, pos: graph.nodes[u].pos, fromDepth: Math.max(SEWER.minCover, nodeDepth[u]), flow: peak }); }
-      const downDepth = upDepth + slope * e.len;
+      let lift = false, forceMain = false, pipeSlope = slope;
+      if (upDepth + slope * e.len > SEWER.maxDepth) {
+        lift = true; liftStations.push({ node: u, pos: graph.nodes[u].pos, fromDepth: upDepth, flow: peak });
+        upDepth = SEWER.minCover;
+        // a run too long to stay above the limit even from minimum cover is pumped: a pressurised force main at constant depth
+        if (upDepth + slope * e.len > SEWER.maxDepth) { forceMain = true; pipeSlope = 0; }
+      }
+      const downDepth = upDepth + pipeSlope * e.len;
       nodeDepth[u] = upDepth;
       nodeDepth[p] = Math.max(nodeDepth[p], downDepth);
       avgFlow[p] += avgFlow[u]; popUp[p] += popUp[u];
       maxUpD[p] = Math.max(maxUpD[p], D);
       byUp[u] = pipes.length;
-      pipes.push({ up: u, down: p, edge: pedge[u], length: e.len, diameter: D, slope, upDepth, downDepth, flow: peak, avgFlow: avgFlow[u], lift, plant: src[u] });
+      pipes.push({ up: u, down: p, edge: pedge[u], length: e.len, diameter: D, slope: pipeSlope, upDepth, downDepth, flow: peak, avgFlow: avgFlow[u], lift, forceMain, plant: src[u] });
     }
     const plants = plantNodes.map((n, i) => ({ node: n, pos: graph.nodes[n].pos, flowM3Day: avgFlow[n] * 86400, depth: nodeDepth[n], served: Math.round(popUp[n]) }));
     // manholes at junctions and ends of runs
     const inDeg = new Int32Array(N); for (const p of pipes) inDeg[p.down]++;
     const manholes = [];
-    for (const p of pipes) if (inDeg[p.up] !== 1 || graph.nodes[p.up].deg !== 2) manholes.push({ node: p.up, depth: p.upDepth });
+    for (const p of pipes) if (inDeg[p.up] !== 1 || graph.nodes[p.up].deg !== 2) manholes.push({ node: p.up, pos: graph.nodes[p.up].pos, depth: p.upDepth });
     return { plants, pipes, liftStations, manholes, nodeDepth, byUp };
   })();
 
@@ -303,8 +356,19 @@ export function buildInfrastructure(layout) {
     const towerHeight = Math.min(towerHeightRaw, WATER.maxTowerHeight);
     const k = Math.max(1, Math.ceil(population / WATER.zonePopulation));
     const start = loadNodes.length ? loadNodes.reduce((m, i) => (dist(graph.nodes[i].pos, centre) < dist(graph.nodes[m].pos, centre) ? i : m), loadNodes[0]) : 0;
-    const towerNodes = farthestPoints(graph, loadNodes.length ? loadNodes : [start], k, start);
-    const { d, parent, pedge, src } = dijkstra(graph, towerNodes);
+    let towerNodes = farthestPoints(graph, loadNodes.length ? loadNodes : [start], k, start);
+    let { d, parent, pedge, src } = dijkstra(graph, towerNodes);
+    for (let iter = 0; iter < 8; iter++) {
+      const zp = new Float64Array(towerNodes.length);
+      for (const i of loadNodes) if (src[i] >= 0) zp[src[i]] += resAt[i];
+      const far = new Int32Array(towerNodes.length).fill(-1), farD = new Float64Array(towerNodes.length).fill(-1);
+      for (const i of loadNodes) { const z = src[i]; if (z >= 0 && d[i] > farD[z]) { farD[z] = d[i]; far[z] = i; } }
+      const extra = [];
+      for (let z = 0; z < towerNodes.length; z++) if (zp[z] > 2 * WATER.zonePopulation && farD[z] > 300) extra.push(far[z]);
+      if (!extra.length) break;
+      towerNodes = [...towerNodes, ...extra];
+      ({ d, parent, pedge, src } = dijkstra(graph, towerNodes));
+    }
     const order = leavesFirst(d);
     const demand = new Float64Array(N); // m³/s average
     const mains = new Map(); // edge index → main
@@ -327,23 +391,24 @@ export function buildInfrastructure(layout) {
       return dm > db ? i : m;
     }, siteCandidates[0]);
     const trunk = dijkstra(graph, [plantNode]);
-    const trunkMains = [];
+    const trunkFlow = new Map();
     towerNodes.forEach((t, zi) => {
-      const flow = zoneDemand[zi] * WATER.maxDay;
-      const need = Math.sqrt((4 * flow) / (Math.PI * 2.0));
-      const D = Math.max(0.3, pickDiameter(WATER.diameters, need));
-      for (let u = t; trunk.parent[u] >= 0; u = trunk.parent[u]) {
-        const ei = trunk.pedge[u], e = graph.edges[ei], cur = mains.get(ei);
-        if (cur && cur.kind === 'trunk' && cur.diameter >= D) continue;
-        const m = { edge: ei, a: trunk.parent[u], b: u, length: e.len, diameter: Math.max(D, cur?.diameter ?? 0), flow: Math.max(flow, cur?.flow ?? 0), velocity: 0, depth: WATER.cover, kind: 'trunk', zone: zi };
-        m.velocity = m.flow / (Math.PI * m.diameter * m.diameter / 4);
-        mains.set(ei, m); trunkMains.push(m);
-      }
+      for (let u = t; trunk.parent[u] >= 0; u = trunk.parent[u]) trunkFlow.set(trunk.pedge[u], (trunkFlow.get(trunk.pedge[u]) ?? 0) + zoneDemand[zi] * WATER.maxDay);
     });
+    const trunkMains = [];
+    for (const [ei, flow] of trunkFlow) {
+      const e = graph.edges[ei], cur = mains.get(ei);
+      const need = Math.sqrt((4 * flow) / (Math.PI * 2.0));
+      const D = Math.max(0.3, pickDiameter(WATER.diameters, need), cur?.diameter ?? 0);
+      const a = trunk.parent[e.a] === e.b ? e.b : e.a, b = a === e.a ? e.b : e.a; // flow runs away from the plant
+      const m = { edge: ei, a, b, length: e.len, diameter: D, flow: Math.max(flow, cur?.flow ?? 0), velocity: 0, depth: WATER.cover, kind: 'trunk', zone: -1 };
+      m.velocity = m.flow / (Math.PI * m.diameter * m.diameter / 4);
+      mains.set(ei, m); trunkMains.push(m);
+    }
     const towers = towerNodes.map((n, zi) => ({ node: n, pos: graph.nodes[n].pos, height: towerHeight, pumped, storageM3: zoneDemand[zi] * 86400, served: Math.round(zonePop[zi]), demandM3Day: zoneDemand[zi] * 86400 }));
     const nodeHead = new Float64Array(N);
-    for (let i = 0; i < N; i++) if (Number.isFinite(d[i])) nodeHead[i] = (1000 * G0 * g * towerHeight) / 1e5; // bar
-    const plant = { node: plantNode, pos: graph.nodes[plantNode].pos, capacityM3Day: demand.reduce((s, x) => s + x, 0) * 0 + zoneDemand.reduce((s, x) => s + x, 0) * 86400 * WATER.maxDay };
+    for (const m of mains.values()) { nodeHead[m.a] = nodeHead[m.b] = (1000 * G0 * g * towerHeight) / 1e5; } // bar, static
+    const plant = { node: plantNode, pos: graph.nodes[plantNode].pos, capacityM3Day: zoneDemand.reduce((s, x) => s + x, 0) * 86400 * WATER.maxDay };
     return { towers, plant, mains: [...mains.values()], nodeHead, towerHeight, pumped };
   })();
 
@@ -391,17 +456,17 @@ export function buildInfrastructure(layout) {
       }, siteCandidates[0]);
     const peakMW = peakMVA * POWER.powerFactor;
     const plants = [{ node: plantNode, pos: graph.nodes[plantNode].pos, capacityMW: Math.ceil((peakMW * 1.25) / 50) * 50, kind: arcology || meta.preset === 'alien' ? 'core reactor' : 'power station' }];
-    // transmission: sequential shortest paths, reusing built corridors
+    // transmission: the shortest-path tree from the plant, so lines share corridors toward the plant
+    const tx = dijkstra(graph, [plantNode]);
     const used = new Set();
     const transmission = [];
-    const byDist = substations.map((s, i) => i).sort((x, y) => dist(substations[x].pos, plants[0].pos) - dist(substations[y].pos, plants[0].pos));
-    for (const si of byDist) {
-      const path = dijkstra(graph, [plantNode], (e) => (used.has(e) ? e.len * 0.2 : e.len));
-      for (let u = substations[si].node; path.parent[u] >= 0; u = path.parent[u]) {
-        const e = graph.edges[path.pedge[u]];
-        if (used.has(e)) continue;
-        used.add(e);
-        transmission.push({ edge: path.pedge[u], a: path.parent[u], b: u, length: e.len, kV: POWER.transmissionKV, depth: POWER.transmissionDepth });
+    for (const sst of substations) {
+      for (let u = sst.node; tx.parent[u] >= 0; u = tx.parent[u]) {
+        const ei = tx.pedge[u];
+        if (used.has(ei)) break; // the rest of the path is already built
+        used.add(ei);
+        const e = graph.edges[ei];
+        transmission.push({ edge: ei, a: tx.parent[u], b: u, length: e.len, kV: POWER.transmissionKV, depth: POWER.transmissionDepth });
       }
     }
     const nodeFeeder = new Int32Array(N).fill(-1);
@@ -423,9 +488,21 @@ export function buildInfrastructure(layout) {
       if (stations.some((s) => dist(s.pos, graph.nodes[node].pos) < TRANSIT.minSpacing)) continue;
       stations.push({ node, pos: graph.nodes[node].pos, district: b.district, name: `District ${b.district} station` });
     }
+    // a city with only a few districts still needs a line: add stops by farthest-point sampling of the busiest streets
+    if (stations.length < Math.min(4, Math.ceil(meta.world.extent / 700)) && loadNodes.length) {
+      const busy = loadNodes.slice().sort((x, y) => (resAt[y] + jobsAt[y]) - (resAt[x] + jobsAt[x])).slice(0, Math.max(50, loadNodes.length >> 3));
+      const startNode = stations.length ? stations[0].node : busy[0];
+      for (const n of farthestPoints(graph, busy, 12, startNode)) {
+        if (stations.some((s) => dist(s.pos, graph.nodes[n].pos) < TRANSIT.minSpacing * 1.4)) continue;
+        if (dist(graph.nodes[n].pos, centre) > meta.world.extent * 0.92) continue;
+        stations.push({ node: n, pos: graph.nodes[n].pos, district: -1, name: `Station ${stations.length + 1}` });
+        if (stations.length >= TRANSIT.maxStations) break;
+      }
+    }
     if (stations.length < 2) return { stations: [], tunnels: [], depth: null };
-    // pairwise street-path lengths, MST, union of paths
-    const paths = stations.map((s) => dijkstra(graph, [s.node]));
+    // pairwise street-path lengths (service corridors cost five times their length), MST, union of paths
+    const corridorCost = (e) => (e.kind === 'corridor' || e.kind === 'service' ? e.len * 5 : e.len);
+    const paths = stations.map((s) => dijkstra(graph, [s.node], corridorCost));
     const inTree = new Set([0]), edgesUsed = new Map();
     while (inTree.size < stations.length) {
       let best = null;
@@ -441,18 +518,26 @@ export function buildInfrastructure(layout) {
         if (!edgesUsed.has(ei)) edgesUsed.set(ei, { a: paths[best[0]].parent[u], b: u, line: `${best[0]}-${best[1]}` });
       }
     }
-    // depth: below every foundation along the corridor
-    const bHash = new PointHash(80);
-    layout.buildings.forEach((b, i) => bHash.add(b.pos, i));
+    // depth: below every foundation whose footprint reaches the corridor, searched along the whole segment
+    const bCell = 80, bHash = new PointHash(bCell);
+    let maxHalfDiag = 0;
+    layout.buildings.forEach((b, i) => { bHash.add(b.pos, i); maxHalfDiag = Math.max(maxHalfDiag, Math.hypot(b.w, b.d) / 2); });
+    const reach = TRANSIT.corridor + maxHalfDiag;
+    const rings = Math.ceil(reach / bCell) + 1;
     let depth = TRANSIT.minDepth;
     const tunnels = [];
     for (const [ei, t] of edgesUsed) {
-      const e = graph.edges[ei], A = graph.nodes[t.a].pos, B = graph.nodes[t.b].pos, mid = scale3(add(A, B), 0.5);
-      const near = [];
-      for (const [bi] of bHash.near(mid, e.len / 2 + TRANSIT.corridor + 40, 2)) {
-        const b = layout.buildings[bi], ab = sub(B, A), L2 = ab[0] ** 2 + ab[1] ** 2 + ab[2] ** 2 || 1;
-        const ap = sub(b.pos, A), tt = clamp((ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / L2, 0, 1);
-        if (len3(sub(ap, scale3(ab, tt))) <= TRANSIT.corridor + Math.hypot(b.w, b.d) / 2) near.push(bi);
+      const e = graph.edges[ei], A = graph.nodes[t.a].pos, B = graph.nodes[t.b].pos;
+      const ab = sub(B, A), L2 = ab[0] ** 2 + ab[1] ** 2 + ab[2] ** 2 || 1;
+      const seenB = new Set(), near = [];
+      const steps = Math.max(1, Math.ceil(e.len / bCell));
+      for (let k = 0; k <= steps; k++) {
+        const S = add(A, scale3(ab, k / steps));
+        for (const [bi] of bHash.near(S, bCell + reach, rings)) {
+          if (seenB.has(bi)) continue; seenB.add(bi);
+          const b = layout.buildings[bi], ap = sub(b.pos, A), tt = clamp((ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / L2, 0, 1);
+          if (len3(sub(ap, scale3(ab, tt))) <= TRANSIT.corridor + Math.hypot(b.w, b.d) / 2) near.push(bi);
+        }
       }
       let need = TRANSIT.minDepth;
       for (const bi of near) need = Math.max(need, foundationDepth(layout.buildings[bi]) + TRANSIT.clearance + TRANSIT.diameter / 2);
@@ -467,14 +552,14 @@ export function buildInfrastructure(layout) {
 
   // ---- utility tunnels under every boulevard of an arcology
   const utilidors = arcology
-    ? graph.edges.map((e, i) => ({ e, i })).filter(({ e }) => e.kind === 'boulevard').map(({ e, i }) => ({ edge: i, a: e.a, b: e.b, length: e.len, width: UTILIDOR.width, height: UTILIDOR.height, depth: UTILIDOR.depth, carries: ['water', 'power', 'sewer', 'data', 'heat'] }))
+    ? graph.edges.map((e, i) => ({ e, i })).filter(({ e }) => e.kind === 'boulevard' || e.kind === 'corridor').map(({ e, i }) => ({ edge: i, a: e.a, b: e.b, length: e.len, width: UTILIDOR.width, height: UTILIDOR.height, depth: UTILIDOR.depth, carries: ['water', 'power', 'sewer', 'data', 'heat'] }))
     : [];
 
   // ---- stats and checks
   const km = (arr, f = (x) => x.length) => arr.reduce((s, x) => s + f(x), 0) / 1000;
   const waterDemandM3Day = water.towers.reduce((s, t) => s + t.demandM3Day, 0);
   const maxSewerDepth = sewer.pipes.reduce((m, p) => Math.max(m, p.downDepth), 0);
-  const minSlopeRatio = sewer.pipes.reduce((m, p) => Math.min(m, p.slope / sewerMinSlope(p.diameter, g)), Infinity);
+  const minSlopeRatio = sewer.pipes.filter((p) => !p.forceMain).reduce((m, p) => Math.min(m, p.slope / sewerMinSlope(p.diameter, g)), Infinity);
   const maxVel = water.mains.reduce((m, x) => Math.max(m, x.velocity), 0);
   const maxSubLoad = power.substations.reduce((m, s) => Math.max(m, s.loadMVA / s.ratingMVA), 0);
   let minTunnelClear = Infinity;
@@ -489,6 +574,7 @@ export function buildInfrastructure(layout) {
     served: laterals.length, buildings: layout.buildings.length,
     population: Math.round(population), jobs: Math.round(jobs),
     sewerKm: km(sewer.pipes), liftStations: sewer.liftStations.length, treatmentPlants: sewer.plants.length, manholes: sewer.manholes.length,
+    forceMains: sewer.pipes.filter((p) => p.forceMain).length,
     maxSewerDepth, sewerFlowM3Day: sewer.plants.reduce((s, p) => s + p.flowM3Day, 0),
     waterKm: km(water.mains), towers: water.towers.length, towerHeight: water.towerHeight, pumped: water.pumped, waterDemandM3Day, maxVelocity: maxVel,
     powerKm: km(power.feeders) + km(power.transmission), transmissionKm: km(power.transmission), substations: power.substations.length, peakMW: power.peakMW, maxSubstationLoad: maxSubLoad,
@@ -500,7 +586,7 @@ export function buildInfrastructure(layout) {
   const check = (id, label, value, status, basis) => checks.push({ id, label, value, status, basis });
   check('service', 'Buildings with water, sewer and power', `${laterals.length} of ${layout.buildings.length}`, laterals.length === layout.buildings.length ? 'pass' : 'fail', 'Each building connects to the nearest street node');
   check('sewer-slope', 'Sewer slope vs. self-cleansing minimum', `${(minSlopeRatio * 100).toFixed(0)}% of minimum or more`, minSlopeRatio >= 1 - 1e-9 ? 'pass' : 'fail', `Ten-State slopes ÷ g (${g} g): 0.40 % at 200 mm on Earth`);
-  check('sewer-depth', 'Deepest sewer', `${maxSewerDepth.toFixed(1)} m, ${sewer.liftStations.length} lift station${sewer.liftStations.length === 1 ? '' : 's'}`, maxSewerDepth <= SEWER.maxDepth + 1e-6 ? 'pass' : 'fail', `Runs deeper than ${SEWER.maxDepth} m get a lift station`);
+  check('sewer-depth', 'Deepest sewer', `${maxSewerDepth.toFixed(1)} m, ${sewer.liftStations.length} lift station${sewer.liftStations.length === 1 ? '' : 's'}${stats.forceMains ? `, ${stats.forceMains} force main${stats.forceMains === 1 ? '' : 's'}` : ''}`, maxSewerDepth <= SEWER.maxDepth + 1e-6 ? 'pass' : 'fail', `Runs deeper than ${SEWER.maxDepth} m get a lift station; runs too long for gravity are pumped`);
   check('water-velocity', 'Fastest water main', `${maxVel.toFixed(2)} m/s`, maxVel <= WATER.maxVelocity ? 'pass' : 'fail', 'Sized for 1.5 m/s at peak hour; 2.5 m/s limit');
   check('water-pressure', 'Tank height for 3.4 bar', `${water.towerHeight.toFixed(0)} m${water.pumped ? ' + pumps' : ''}`, water.pumped ? 'warn' : 'pass', 'h = P/(ρ g): the same pressure needs taller tanks at low gravity');
   check('substation-load', 'Most loaded substation', `${(maxSubLoad * 100).toFixed(0)}% of rating`, maxSubLoad <= 1 ? 'pass' : 'fail', `Zones split until every substation is under its ${POWER.substationMVA[meta.preset]} MVA rating`);
