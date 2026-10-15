@@ -129,6 +129,20 @@ test('every building respects the material self-weight limit and the slenderness
   }
 });
 
+test('a spherical megastructure stays a shell under a quarter of the radius', () => {
+  const L = city({ plate: 'sphere', preset: 'megastructure', frequency: 432 });
+  for (const b of L.buildings) assert.ok(b.h <= 0.25 * L.meta.world.Rs + 1e-6);
+});
+
+test('buildings over six floors have room for a lift core', () => {
+  for (const plate of PLATES) for (const preset of ['city', 'alien']) for (const inverse of [false, true]) {
+    const L = city({ plate, preset, frequency: 432, inverse });
+    for (const b of L.buildings) {
+      if (b.floors > 6) assert.ok(Math.min(b.w, b.d) >= 14 - 1e-9, `${plate}/${preset}: ${b.floors} floors on ${Math.min(b.w, b.d).toFixed(1)} m`);
+    }
+  }
+});
+
 test('the height limit scales as 1/g', () => {
   const ratio = heightLimit('concrete', 0.38) / heightLimit('concrete', 1);
   assert.ok(Math.abs(ratio - 1 / 0.38) < 1e-9);

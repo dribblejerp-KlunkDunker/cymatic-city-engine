@@ -1,0 +1,716 @@
+<title>Cymatic City Engine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap">
+<style>
+/* Layout: the vibrating plate fills the screen; an instrument panel docks right (a bottom sheet on phones).
+   One committed look: a dusk-lit brass plate with sand on its nodal lines. */
+:root {
+  color-scheme: dark;
+  --night: #0f1418;
+  --plate: #161d23;
+  --plate-2: #1f2830;
+  --rule: #2c3741;
+  --ink: #ebe5d8;
+  --ink-dim: #9ba5aa;
+  --brass: #d3a658;
+  --brass-ink: #1b1408;
+  --sand: #f0e4c4;
+  --pos: #e3905f;
+  --neg: #63a9be;
+  --ok: #82c290;
+  --warn: #e4b24c;
+  --bad: #e36b5e;
+  --display: "Instrument Serif", "Iowan Old Style", Georgia, serif;
+  --body: "Instrument Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --step--1: 0.78rem; --step-0: 0.9rem; --step-1: 1.05rem; --step-3: 2.6rem;
+}
+html, body { height: 100%; }
+body { background: var(--night); color: var(--ink); font: 400 var(--step-0)/1.45 var(--body); overflow: hidden; }
+#app { position: relative; height: 100%; overflow: hidden; }
+#scene { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+
+.hud {
+  position: absolute; top: calc(14px + env(safe-area-inset-top, 0px)); left: calc(16px + env(safe-area-inset-left, 0px));
+  pointer-events: none; display: grid; gap: 2px; max-width: min(520px, calc(100% - 32px));
+  text-shadow: 0 1px 12px rgba(10, 14, 18, 0.8);
+}
+.hud .eyebrow { font: 500 var(--step--1)/1 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--brass); }
+.hud .freq { font: 400 var(--step-3)/1 var(--display); letter-spacing: -0.01em; }
+.hud .freq small { font-size: 0.45em; color: var(--ink-dim); margin-left: 0.25em; font-family: var(--body); }
+.hud .mode { font: 400 var(--step--1)/1.4 var(--mono); color: var(--ink-dim); }
+
+#busy {
+  position: absolute; left: 50%; top: calc(18px + env(safe-area-inset-top, 0px)); transform: translateX(-50%);
+  background: var(--plate-2); border: 1px solid var(--rule); color: var(--sand); border-radius: 999px;
+  padding: 6px 14px; font: 500 var(--step--1)/1.2 var(--mono); letter-spacing: 0.04em;
+}
+#pick {
+  position: absolute; left: calc(16px + env(safe-area-inset-left, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  background: var(--plate); border: 1px solid var(--rule); border-radius: 10px; padding: 10px 12px; min-width: 200px; max-width: 280px;
+  font: 400 var(--step--1)/1.5 var(--mono); color: var(--ink);
+}
+#pick b { font-family: var(--body); font-weight: 600; font-size: var(--step-0); display: block; margin-bottom: 2px; }
+#pick dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 0 10px; }
+#pick dt { color: var(--ink-dim); } #pick dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+
+#panel {
+  position: absolute; top: calc(12px + env(safe-area-inset-top, 0px)); right: calc(12px + env(safe-area-inset-right, 0px));
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px)); width: 372px;
+  background: color-mix(in srgb, var(--plate) 94%, transparent); border: 1px solid var(--rule); border-radius: 14px;
+  display: flex; flex-direction: column; overflow: hidden; backdrop-filter: blur(6px);
+}
+.sheet-head { padding: 14px 16px 12px; border-bottom: 1px solid var(--rule); display: grid; gap: 10px; }
+.sheet-toggle { display: none; }
+.scroll { overflow-y: auto; overscroll-behavior: contain; padding: 4px 16px 20px; display: grid; gap: 18px; }
+section { display: grid; gap: 10px; min-width: 0; }
+h2 { margin: 12px 0 0; font: 500 var(--step--1)/1 var(--mono); text-transform: uppercase; letter-spacing: 0.14em; color: var(--brass); }
+
+.freq-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; }
+.freq-row label { grid-column: 1 / -1; font-size: var(--step--1); color: var(--ink-dim); display: flex; justify-content: space-between; }
+input[type=range] { width: 100%; accent-color: var(--brass); grid-column: 1 / 2; }
+input[type=number], select {
+  background: var(--plate-2); color: var(--ink); border: 1px solid var(--rule); border-radius: 8px; padding: 6px 8px;
+  font: 400 var(--step-0)/1.2 var(--mono); font-variant-numeric: tabular-nums; min-width: 0;
+}
+#freq-num { width: 88px; }
+button {
+  font: 500 var(--step--1)/1 var(--body); color: var(--ink); background: var(--plate-2); border: 1px solid var(--rule);
+  border-radius: 8px; padding: 8px 11px; cursor: pointer;
+}
+button:hover { border-color: var(--brass); }
+button.primary { background: var(--brass); color: var(--brass-ink); border-color: var(--brass); font-weight: 600; }
+button[aria-pressed=true] { background: var(--brass); color: var(--brass-ink); border-color: var(--brass); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+:focus-visible { outline: 2px solid var(--sand); outline-offset: 2px; }
+
+.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px; background: var(--night); border: 1px solid var(--rule); border-radius: 10px; padding: 3px; }
+.seg button { border: 0; background: transparent; padding: 8px 4px; border-radius: 7px; }
+.seg button[aria-pressed=true] { background: var(--plate-2); color: var(--sand); box-shadow: inset 0 0 0 1px var(--brass); }
+.field { display: grid; gap: 5px; font-size: var(--step--1); color: var(--ink-dim); }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.inline { display: flex; gap: 8px; align-items: center; }
+.inline input { flex: 1; }
+.check { display: flex; gap: 8px; align-items: flex-start; font-size: var(--step--1); color: var(--ink); }
+.check input { accent-color: var(--brass); margin-top: 2px; }
+.hint { font-size: var(--step--1); color: var(--ink-dim); margin: 0; }
+
+.figure { display: grid; grid-template-columns: 112px 1fr; gap: 12px; align-items: center; }
+#figure { width: 112px; height: 112px; border-radius: 50%; border: 1px solid var(--rule); background: var(--night); image-rendering: auto; }
+#figure.sq { border-radius: 4px; } #figure.eq { height: 56px; border-radius: 4px; }
+.figure p { margin: 0; font-size: var(--step--1); color: var(--ink-dim); }
+.figure p strong { display: block; color: var(--ink); font: 400 var(--step-1)/1.25 var(--display); margin-bottom: 3px; }
+
+.modes { display: grid; gap: 6px; }
+.mode-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; font: 400 var(--step--1)/1.3 var(--mono); font-variant-numeric: tabular-nums; }
+.mode-row .bar { grid-column: 1 / -1; height: 4px; background: var(--night); border-radius: 2px; overflow: hidden; }
+.mode-row .bar i { display: block; height: 100%; background: var(--sand); }
+.mode-row span:last-child { color: var(--ink-dim); }
+
+.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 10px; overflow: hidden; }
+.stat { background: var(--plate); padding: 8px 10px; display: grid; gap: 2px; }
+.stat span { font-size: var(--step--1); color: var(--ink-dim); }
+.stat b { font: 500 var(--step-1)/1.1 var(--mono); font-variant-numeric: tabular-nums; }
+
+.checks { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.checks li { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 8px; align-items: baseline; font-size: var(--step--1); }
+.checks .pill { font: 600 0.68rem/1 var(--mono); text-transform: uppercase; letter-spacing: 0.06em; padding: 3px 6px; border-radius: 4px; }
+.pill.pass { background: color-mix(in srgb, var(--ok) 22%, transparent); color: var(--ok); }
+.pill.warn { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
+.pill.fail { background: color-mix(in srgb, var(--bad) 22%, transparent); color: var(--bad); }
+.checks .val { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.checks .basis { grid-column: 2 / -1; color: var(--ink-dim); }
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: var(--step--1); color: var(--ink-dim); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+details summary { cursor: pointer; font: 500 var(--step--1)/1 var(--mono); text-transform: uppercase; letter-spacing: 0.14em; color: var(--brass); padding: 6px 0; }
+details > div { display: grid; gap: 12px; padding-top: 8px; }
+.about p { margin: 0; font-size: var(--step--1); color: var(--ink-dim); max-width: 62ch; }
+.about p b { color: var(--ink); font-weight: 600; }
+#status { min-height: 1.2em; }
+
+@media (max-width: 860px) {
+  #panel {
+    top: auto; left: 0; right: 0; bottom: 0; width: auto; border-radius: 16px 16px 0 0; border-bottom: 0;
+    max-height: 62%; padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px);
+  }
+  #panel.collapsed .scroll { display: none; }
+  .sheet-toggle { display: block; justify-self: center; width: 56px; height: 18px; padding: 0; border: 0; background: transparent; }
+  .sheet-toggle::before { content: ""; display: block; width: 44px; height: 4px; margin: 0 auto; border-radius: 2px; background: var(--rule); }
+  .hud .freq { font-size: 2rem; }
+  #pick { bottom: auto; top: calc(110px + env(safe-area-inset-top, 0px)); }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<div id="app">
+  <canvas id="scene" aria-label="3D view of the generated settlement"></canvas>
+
+  <div class="hud" aria-live="polite">
+    <div class="eyebrow" id="hud-eyebrow">Circular membrane · City</div>
+    <div class="freq"><span id="hud-freq">432</span><small>Hz</small></div>
+    <div class="mode" id="hud-mode">A4 −32¢ · mode (m 8, n 5)</div>
+  </div>
+  <div id="busy" hidden>Resonating…</div>
+  <div id="pick" hidden></div>
+
+  <aside id="panel" aria-label="Engine controls">
+    <div class="sheet-head">
+      <button class="sheet-toggle" id="sheet-toggle" aria-label="Show or hide controls" aria-expanded="true"></button>
+      <div class="freq-row">
+        <label for="freq-range"><span>Drive frequency</span><span id="freq-range-label">40–1330 Hz</span></label>
+        <input type="range" id="freq-range" min="0" max="1000" step="1" aria-label="Drive frequency">
+        <input type="number" id="freq-num" min="1" step="0.1" aria-label="Frequency in hertz">
+        <button id="tone" aria-pressed="false" title="Play the drive tone">Tone</button>
+      </div>
+      <div class="seg" role="group" aria-label="Settlement type" id="preset-seg">
+        <button data-v="town">Town</button><button data-v="city">City</button><button data-v="megastructure">Mega</button><button data-v="alien">Alien</button>
+      </div>
+    </div>
+
+    <div class="scroll">
+      <section>
+        <div class="figure">
+          <canvas id="figure" width="224" height="224" aria-label="Sand figure on the plate"></canvas>
+          <p id="figure-caption"><strong>Sand figure</strong>Where sand gathers, the plate stands still. Those nodal lines become the boulevards.</p>
+        </div>
+      </section>
+
+      <section>
+        <h2>Plate</h2>
+        <div class="seg" role="group" aria-label="Plate shape" id="plate-seg">
+          <button data-v="circle">Disk</button><button data-v="square">Square</button><button data-v="sphere">Sphere</button>
+        </div>
+        <div class="pair">
+          <label class="field" for="seed">Seed
+            <div class="inline"><input type="number" id="seed" min="0" step="1"><button id="reroll" title="New seed">New</button></div>
+          </label>
+          <label class="field" for="q">Resonance Q
+            <input type="number" id="q" min="2" max="1000" step="1">
+          </label>
+        </div>
+        <label class="check" for="inverse"><input type="checkbox" id="inverse">
+          <span>Build on the sand lines instead of the antinodes (tallest buildings line the boulevards, lobe centres become plazas)</span></label>
+      </section>
+
+      <section>
+        <h2>Resonating modes</h2>
+        <div class="modes" id="modes"></div>
+        <p class="hint" id="symmetry"></p>
+      </section>
+
+      <section>
+        <h2>Settlement</h2>
+        <div class="stats" id="stats"></div>
+        <div class="legend" id="legend"></div>
+      </section>
+
+      <section>
+        <h2>Plausibility</h2>
+        <ul class="checks" id="checks"></ul>
+      </section>
+
+      <details>
+        <summary>Physics and structure</summary>
+        <div>
+          <div class="pair">
+            <label class="field" for="gravity">Gravity (g)
+              <input type="number" id="gravity" min="0.05" max="5" step="0.01">
+            </label>
+            <label class="field" for="material">Structure
+              <select id="material"></select>
+            </label>
+          </div>
+          <div class="pair">
+            <label class="field" for="fund">Lowest mode (Hz)
+              <input type="number" id="fund" min="1" step="0.5">
+            </label>
+            <label class="field" for="drive">Drive point (0 centre – 1 edge)
+              <input type="number" id="drive" min="0" max="0.95" step="0.01">
+            </label>
+          </div>
+          <label class="field" for="azimuthal" id="azimuthal-wrap">Sphere meridians (m), auto = half the degree
+            <input type="number" id="azimuthal" min="0" max="48" step="1" placeholder="auto">
+          </label>
+          <p class="hint" id="limits"></p>
+        </div>
+      </details>
+
+      <section>
+        <h2>Save</h2>
+        <div class="actions">
+          <button class="primary" id="save-model">3D model (.zip: OBJ + JSON)</button>
+          <button id="save-png">Image (.png)</button>
+        </div>
+        <p class="hint" id="status"></p>
+      </section>
+
+      <details class="about">
+        <summary>How it works</summary>
+        <div>
+          <p><b>Frequency to pattern.</b> The drive tone shakes a plate. Each plate has natural modes at fixed frequencies: Bessel zeros for the disk membrane (f ∝ j<sub>mn</sub>), m² + n² for the square Chladni plate, √(l(l+1)) for the sphere. The engine sums the modes near your frequency, weighted by a damped resonance of sharpness Q, the way a real driven plate responds.</p>
+          <p><b>Pattern to plan.</b> Sand on a Chladni plate settles on the nodal lines, where the plate does not move. Those lines become boulevards. Contour rings follow the amplitude, and gradient streets run from each nodal line up to the crest, so a ring-and-spoke plan grows around every antinode. Amplitude sets density and height; the sign of the wave splits the city into alternating districts.</p>
+          <p><b>Realism rules.</b> Streets aim for UN-Habitat's 18 km of street per km². Every building keeps a setback from every road and sits within walking reach of a street. Heights stay under the material's self-weight limit σ/(ρ·g·3) and a slenderness limit that eases at low gravity. Population assumes 45 m² per resident and 15 m² per worker.</p>
+          <p><b>What the frequency does not mean.</b> The standing-wave patterns are real physics; turning them into a city is a design choice. No study shows 432 Hz, Solfeggio tones or the Schumann resonance make a place healthier or more harmonious, so the engine treats every frequency alike. Some Neolithic chambers do resonate near 95–120 Hz; whether that was intended is still debated.</p>
+        </div>
+      </details>
+    </div>
+  </aside>
+</div>
+
+<script type="text/plain" id="engine-src">@@ENGINE_TEXT@@</script>
+<script type="module">
+import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/+esm";
+import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js/+esm";
+
+/*@@ENGINE@@*/
+
+// ------------------------------------------------------------ state
+const $ = (id) => document.getElementById(id);
+const DEFAULTS = { frequency: 432, plate: "circle", preset: "city", seed: 1, Q: 30, inverse: false,
+  gravity: null, material: null, fundamentalHz: null, driveOffset: null, azimuthal: null };
+let params = { ...DEFAULTS };
+try { const s = JSON.parse(localStorage.getItem("cymatic-city-params") || "null"); if (s) params = { ...DEFAULTS, ...s }; } catch {}
+const remember = () => { try { localStorage.setItem("cymatic-city-params", JSON.stringify(params)); } catch {} };
+
+const engineParams = () => {
+  const o = { frequency: params.frequency, plate: params.plate, preset: params.preset, seed: params.seed, Q: params.Q, inverse: params.inverse };
+  if (params.gravity != null) o.gravity = params.gravity;
+  if (params.material) o.material = params.material;
+  if (params.fundamentalHz != null) o.fundamentalHz = params.fundamentalHz;
+  if (params.driveOffset != null) o.driveOffset = params.driveOffset;
+  if (params.azimuthal != null) o.azimuthal = params.azimuthal;
+  return o;
+};
+
+// ------------------------------------------------------------ generation (worker when allowed)
+let worker = null, jobId = 0, pendingTimer = 0, layout = null, lastFrameKey = "";
+try {
+  const src = $("engine-src").textContent.replace(/^export /gm, "") +
+    "\nself.onmessage=(e)=>{const{id,p}=e.data;try{const L=generateCity(p);delete L.field;self.postMessage({id,ok:true,L})}catch(err){self.postMessage({id,ok:false,error:String(err&&err.message||err)})}};";
+  worker = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
+  worker.onmessage = (e) => { if (e.data.id === jobId) e.data.ok ? show(e.data.L) : fail(e.data.error); };
+  worker.onerror = (ev) => { ev.preventDefault?.(); worker = null; runLocal(jobId); };
+} catch { worker = null; }
+
+function runLocal(id) {
+  setTimeout(() => {
+    if (id !== jobId) return;
+    try { const L = generateCity(engineParams()); delete L.field; show(L); } catch (err) { fail(err.message); }
+  }, 30);
+}
+function regenerate(delay = 220) {
+  clearTimeout(pendingTimer);
+  syncControls();
+  pendingTimer = setTimeout(() => {
+    jobId++;
+    $("busy").textContent = `Resonating at ${fmtHz(params.frequency)} Hz…`;
+    $("busy").hidden = false;
+    remember();
+    if (worker) worker.postMessage({ id: jobId, p: engineParams() }); else runLocal(jobId);
+  }, delay);
+}
+function fail(msg) { $("busy").hidden = true; $("status").textContent = msg; }
+
+// ------------------------------------------------------------ three.js scene
+const canvas = $("scene");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+const scene = new THREE.Scene();
+const NIGHT = new THREE.Color("#0f1418");
+scene.background = NIGHT;
+const camera = new THREE.PerspectiveCamera(45, 1, 1, 100000);
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true; controls.dampingFactor = 0.08;
+scene.add(new THREE.HemisphereLight(0xd9e2ea, 0x2a2219, 1.15));
+const sun = new THREE.DirectionalLight(0xffe2b8, 2.1); sun.position.set(0.7, 1, 0.45); scene.add(sun);
+const fill = new THREE.DirectionalLight(0x8fb4c8, 0.55); camera.add(fill); fill.position.set(-1, 0.4, 1); scene.add(camera);
+let world = new THREE.Group(); scene.add(world);
+let pickTargets = [];
+
+// render on demand: only while the view moves or the scene changes
+let dirty = true;
+const invalidate = () => { dirty = true; };
+controls.addEventListener("change", invalidate);
+function resize() {
+  const r = canvas.getBoundingClientRect();
+  renderer.setSize(r.width, r.height, false);
+  camera.aspect = r.width / Math.max(1, r.height);
+  // on wide screens, centre the city in the area left of the docked panel
+  // centre the city in the part of the screen the panel leaves free
+  const panel = document.getElementById("panel").getBoundingClientRect();
+  if (r.width > 860) camera.setViewOffset(r.width, r.height, Math.min(200, panel.width / 2), 0, r.width, r.height);
+  else camera.setViewOffset(r.width, r.height, 0, Math.min(r.height * 0.3, panel.height / 2), r.width, r.height);
+  camera.updateProjectionMatrix(); invalidate();
+}
+new ResizeObserver(resize).observe(canvas);
+resize();
+renderer.setAnimationLoop(() => { controls.update(); if (dirty) { dirty = false; renderer.render(scene, camera); } });
+
+const PALETTES = {
+  town: { pos: ["#cdb48f", "#e4d3b4"], neg: ["#a9b4b6", "#d0d7d6"], roofPos: "#9c4f35", roofNeg: "#4c5f6b", tree: "#4f7a4a" },
+  city: { pos: ["#b88a63", "#f0d6b0"], neg: ["#6d8fa0", "#cfe2ea"], tree: "#4c7c55" },
+  mega: { pos: ["#4a3f36", "#f1dcae"], neg: ["#33424c", "#cfe3ea"], tree: "#4c7c55" },
+  alien: { pos: ["#6e3f86", "#e7a7f3"], neg: ["#1c6d68", "#7ff0d6"], tree: "#33d6b6" },
+};
+const ROAD = { boulevard: "#efe2c2", ring: "#b9ac8d", spoke: "#8c8574", wall: "#d3a658" };
+
+function basisMatrix(m, pos, up, fwd, w, h, d, lift = 0) {
+  const r = [fwd[1] * up[2] - fwd[2] * up[1], fwd[2] * up[0] - fwd[0] * up[2], fwd[0] * up[1] - fwd[1] * up[0]];
+  m.set(
+    fwd[0] * w, up[0] * h, r[0] * d, pos[0] + up[0] * lift,
+    fwd[1] * w, up[1] * h, r[1] * d, pos[1] + up[1] * lift,
+    fwd[2] * w, up[2] * h, r[2] * d, pos[2] + up[2] * lift,
+    0, 0, 0, 1);
+  return m;
+}
+const unitBox = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
+const unitCyl = new THREE.CylinderGeometry(0.5, 0.5, 1, 10).translate(0, 0.5, 0);
+const unitCone = new THREE.ConeGeometry(0.5, 1, 10).translate(0, 0.5, 0);
+const unitDome = new THREE.SphereGeometry(0.5, 12, 5, 0, Math.PI * 2, 0, Math.PI / 2).scale(1, 2, 1);
+const unitRoof = new THREE.ConeGeometry(0.71, 1, 4).rotateY(Math.PI / 4).translate(0, 0.5, 0);
+const unitTree = new THREE.ConeGeometry(0.5, 1, 5).translate(0, 0.5, 0);
+const GEOM = { block: unitBox, tower: unitBox, terrace: unitBox, house: unitBox, pod: unitCyl, dome: unitDome, spire: unitCone };
+
+function disposeWorld() {
+  world.traverse((o) => { if (o.isMesh) { if (o.geometry && !Object.values(GEOM).includes(o.geometry) && ![unitRoof, unitTree].includes(o.geometry)) o.geometry.dispose(); o.material.dispose(); } });
+  scene.remove(world); world = new THREE.Group(); scene.add(world); pickTargets = [];
+}
+
+function show(L) {
+  layout = L;
+  $("busy").hidden = true; $("pick").hidden = true;
+  const ep = engineParams();
+  const F = fieldPreview(ep);
+  disposeWorld();
+  const style = PRESETS[L.meta.preset].style;
+  const pal = PALETTES[style];
+  const sphere = F.kind === "sphere";
+
+  // ground: the plate itself, sand-lit where it stands still
+  let groundGeo;
+  if (sphere) groundGeo = new THREE.SphereGeometry(F.Rs - 0.8, 256, 128);
+  else if (F.shape === "circle") groundGeo = new THREE.RingGeometry(0.001, F.extent * 1.025, 256, 110).rotateX(-Math.PI / 2);
+  else groundGeo = new THREE.PlaneGeometry(F.extent * 2.05, F.extent * 2.05, 220, 220).rotateX(-Math.PI / 2);
+  const gp = groundGeo.attributes.position, gcol = new Float32Array(gp.count * 3);
+  const plateC = new THREE.Color("#2a2a24"), posC = new THREE.Color("#3a2c22"), negC = new THREE.Color("#1f2d33"), sandC = new THREE.Color("#c9b98f"), rimC = new THREE.Color("#5a4a2c");
+  const tmp = new THREE.Color();
+  for (let i = 0; i < gp.count; i++) {
+    const P = [gp.getX(i), sphere ? gp.getY(i) : 0, gp.getZ(i)];
+    const [u, v] = F.toNorm(P);
+    if (!sphere && !F.inside(u, v)) { tmp.copy(rimC); }
+    else {
+      const { S, A } = F.at(u, v);
+      tmp.copy(plateC).lerp(S >= 0 ? posC : negC, Math.min(1, A * 1.3)).lerp(sandC, Math.exp(-((A / 0.07) ** 2)) * 0.8);
+    }
+    gcol.set([tmp.r, tmp.g, tmp.b], i * 3);
+  }
+  groundGeo.setAttribute("color", new THREE.BufferAttribute(gcol, 3));
+  const ground = new THREE.Mesh(groundGeo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0.05 }));
+  if (!sphere) ground.position.y = -0.4;
+  world.add(ground);
+
+  // roads
+  const m4 = new THREE.Matrix4();
+  const roads = new THREE.InstancedMesh(unitBox, new THREE.MeshStandardMaterial({ roughness: 0.9 }), L.roads.length);
+  L.roads.forEach((r, i) => {
+    const dx = r.b[0] - r.a[0], dy = r.b[1] - r.a[1], dz = r.b[2] - r.a[2], len = Math.hypot(dx, dy, dz) || 1e-6;
+    const mid = [(r.a[0] + r.b[0]) / 2, (r.a[1] + r.b[1]) / 2, (r.a[2] + r.b[2]) / 2];
+    const up = sphere ? norm3(mid) : [0, 1, 0];
+    let dir = [dx / len, dy / len, dz / len];
+    // keep dir tangent so the basis stays orthogonal on the sphere
+    const k = dir[0] * up[0] + dir[1] * up[1] + dir[2] * up[2];
+    dir = norm3([dir[0] - k * up[0], dir[1] - k * up[1], dir[2] - k * up[2]]);
+    basisMatrix(m4, mid, up, dir, len + r.w * 0.35, 0.6, r.w, -0.2);
+    roads.setMatrixAt(i, m4);
+    roads.setColorAt(i, tmp.set(ROAD[r.kind] ?? "#999"));
+  });
+  world.add(roads);
+
+  // buildings, grouped by shape
+  const groups = {};
+  L.buildings.forEach((b, i) => { (groups[b.shape] ??= []).push(i); });
+  const lo = new THREE.Color(), hi = new THREE.Color();
+  const maxH = Math.max(1, L.stats.maxHeight);
+  for (const [shape, idx] of Object.entries(groups)) {
+    const mat = new THREE.MeshStandardMaterial({ roughness: style === "alien" ? 0.35 : 0.75, metalness: style === "alien" ? 0.25 : 0.05, flatShading: shape !== "dome" });
+    if (style === "alien") { mat.emissive = new THREE.Color("#140b1c"); }
+    const mesh = new THREE.InstancedMesh(GEOM[shape] ?? unitBox, mat, idx.length);
+    idx.forEach((bi, j) => {
+      const b = L.buildings[bi];
+      basisMatrix(m4, b.pos, b.up, b.fwd, b.w, b.h, b.d);
+      mesh.setMatrixAt(j, m4);
+      const [a, c] = b.polarity >= 0 ? pal.pos : pal.neg;
+      lo.set(a); hi.set(c);
+      const t = style === "mega" ? Math.pow(b.h / maxH, 0.8) : Math.min(1, 0.25 + 0.75 * b.amp);
+      tmp.copy(lo).lerp(hi, t);
+      if (b.landmark) tmp.lerp(new THREE.Color("#ffd27a"), 0.55);
+      mesh.setColorAt(j, tmp);
+    });
+    mesh.userData.index = idx;
+    world.add(mesh); pickTargets.push(mesh);
+  }
+  // pitched roofs for town houses, crowns for landmarks
+  const houses = groups.house ?? [];
+  if (houses.length) {
+    const roof = new THREE.InstancedMesh(unitRoof, new THREE.MeshStandardMaterial({ roughness: 0.8, flatShading: true }), houses.length);
+    houses.forEach((bi, j) => {
+      const b = L.buildings[bi];
+      basisMatrix(m4, b.pos, b.up, b.fwd, b.w, Math.min(b.w, b.d) * 0.45, b.d, b.h);
+      roof.setMatrixAt(j, m4); roof.setColorAt(j, tmp.set(b.polarity >= 0 ? pal.roofPos : pal.roofNeg));
+    });
+    world.add(roof);
+  }
+  const marks = L.buildings.filter((b) => b.landmark && b.shape !== "spire" && b.shape !== "dome");
+  if (marks.length) {
+    const crown = new THREE.InstancedMesh(unitCone, new THREE.MeshStandardMaterial({ color: "#d3a658", emissive: "#5c3d0c", metalness: 0.6, roughness: 0.35 }), marks.length);
+    marks.forEach((b, j) => { const s = Math.min(b.w, b.d) * 0.5; basisMatrix(m4, b.pos, b.up, b.fwd, s, Math.max(6, b.h * 0.14), s, b.h); crown.setMatrixAt(j, m4); });
+    world.add(crown);
+  }
+  // trees
+  if (L.trees.length) {
+    const tr = new THREE.InstancedMesh(unitTree, new THREE.MeshStandardMaterial({ color: pal.tree, roughness: 0.9, flatShading: true, emissive: style === "alien" ? "#06302a" : "#000000" }), L.trees.length);
+    const base = PRESETS[L.meta.preset].lot * 0.22;
+    const any = [1, 0, 0];
+    L.trees.forEach((t, j) => {
+      const f = norm3(cross(t.up, Math.abs(t.up[0]) < 0.9 ? any : [0, 0, 1]));
+      basisMatrix(m4, t.pos, t.up, f, base * t.s, base * 1.8 * t.s, base * t.s);
+      tr.setMatrixAt(j, m4);
+    });
+    world.add(tr);
+  }
+
+  // frame the camera when the plate or scale changed
+  const frameKey = `${L.meta.plate}|${L.meta.preset}`;
+  if (frameKey !== lastFrameKey) {
+    lastFrameKey = frameKey;
+    const E = F.extent + (sphere ? 0.5 : 0.45) * L.stats.maxHeight;
+    // pull back on portrait screens so the whole plate fits the width
+    const k = camera.aspect < 1 ? Math.pow(1 / camera.aspect, 0.85) : 1;
+    if (sphere) { camera.position.set(E * 1.6 * k, E * 1.5 * k, E * 2.2 * k); controls.minDistance = E * 1.05; controls.maxDistance = E * 10; }
+    else { camera.position.set(E * 0.12 * k, E * 1.2 * k, E * 1.65 * k); controls.minDistance = 40; controls.maxDistance = E * 8; }
+    controls.target.set(0, 0, 0);
+    camera.far = E * 30; camera.updateProjectionMatrix();
+    controls.maxPolarAngle = sphere ? Math.PI : Math.PI * 0.49;
+    scene.fog = sphere ? null : new THREE.Fog(NIGHT, E * 3, E * 7);
+  }
+  drawFigure(F);
+  updatePanel(L);
+  invalidate();
+}
+
+// ------------------------------------------------------------ 2D sand figure
+function drawFigure(F) {
+  const c = $("figure"), sphere = F.kind === "sphere";
+  c.className = sphere ? "eq" : F.shape === "square" ? "sq" : "";
+  const W = 224, H = sphere ? 112 : 224;
+  c.width = W; c.height = H;
+  const ctx = c.getContext("2d"), img = ctx.createImageData(W, H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    let u, v, inside = true;
+    if (sphere) { u = Math.PI * (y + 0.5) / H; v = 2 * Math.PI * (x + 0.5) / W; }
+    else {
+      const a = (x + 0.5) / W, b = (y + 0.5) / H;
+      u = F.lo + (F.hi - F.lo) * a; v = F.lo + (F.hi - F.lo) * b;
+      inside = F.inside(u, v);
+    }
+    const o = (y * W + x) * 4;
+    if (!inside) { img.data[o + 3] = 0; continue; }
+    const { S, A } = F.at(u, v);
+    const sand = Math.exp(-((A / 0.06) ** 2));
+    const base = S >= 0 ? [58, 40, 28] : [26, 42, 50];
+    const k = 0.35 + 0.65 * A;
+    img.data[o] = base[0] * k + (240 - base[0] * k) * sand;
+    img.data[o + 1] = base[1] * k + (228 - base[1] * k) * sand;
+    img.data[o + 2] = base[2] * k + (196 - base[2] * k) * sand;
+    img.data[o + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+// ------------------------------------------------------------ panel
+const fmtHz = (f) => (f >= 100 ? f.toFixed(f % 1 ? 1 : 0) : f.toFixed(1));
+const fmtInt = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(2)} M` : n >= 1e4 ? `${Math.round(n / 1e3)}k` : n.toLocaleString("en-US");
+function updatePanel(L) {
+  const m = L.meta, s = L.stats;
+  $("hud-eyebrow").textContent = `${m.plateLabel} · ${m.presetLabel}${m.inverse ? " · sand-line build" : ""}`;
+  $("hud-freq").textContent = fmtHz(m.frequency);
+  $("hud-mode").textContent = `${m.note} · dominant mode ${m.dominant}`;
+  $("figure-caption").innerHTML = "";
+  const strong = document.createElement("strong"); strong.textContent = `Sand figure at ${fmtHz(m.frequency)} Hz`;
+  $("figure-caption").append(strong, document.createTextNode("Where sand gathers, the plate stands still. Those nodal lines become the boulevards."));
+
+  const modes = $("modes"); modes.replaceChildren();
+  for (const md of m.modes) {
+    const row = document.createElement("div"); row.className = "mode-row";
+    const a = document.createElement("span"); a.textContent = `${md.label}  ${md.f.toFixed(1)} Hz`;
+    const b = document.createElement("span"); b.textContent = `${md.detuneHz >= 0 ? "+" : "−"}${Math.abs(md.detuneHz).toFixed(1)} Hz · ${(md.weight * 100).toFixed(0)}%`;
+    const bar = document.createElement("div"); bar.className = "bar"; const i = document.createElement("i"); i.style.width = `${md.weight * 100}%`; bar.append(i);
+    row.append(a, b, bar); modes.append(row);
+  }
+  $("symmetry").textContent = `Dominant pattern: ${m.symmetry}. ${m.law}.`;
+
+  const stats = [
+    ["Residents", fmtInt(s.population)], ["Jobs", fmtInt(s.jobs)],
+    ["Buildings", fmtInt(s.buildings)], ["Districts", s.districts],
+    ["Tallest", `${Math.round(s.maxHeight)} m`], ["Floor area ratio", s.far.toFixed(2)],
+    ["Streets", `${s.roadLengthKm.toFixed(0)} km`], ["Land area", `${s.areaKm2.toFixed(1)} km²`],
+  ];
+  $("stats").replaceChildren(...stats.map(([k, v]) => { const d = document.createElement("div"); d.className = "stat"; const a = document.createElement("span"); a.textContent = k; const b = document.createElement("b"); b.textContent = v; d.append(a, b); return d; }));
+
+  const style = PRESETS[m.preset].style, pal = PALETTES[style];
+  const legend = [[pal.pos[1], "+ phase districts"], [pal.neg[1], "− phase districts"], ["#efe2c2", "Nodal boulevards"], ["#ffd27a", "District landmarks"]];
+  $("legend").replaceChildren(...legend.map(([c, t]) => { const sp = document.createElement("span"); const i = document.createElement("i"); i.style.background = c; sp.append(i, document.createTextNode(t)); return sp; }));
+
+  $("checks").replaceChildren(...L.checks.map((c) => {
+    const li = document.createElement("li");
+    const pill = document.createElement("span"); pill.className = `pill ${c.status}`; pill.textContent = c.status === "pass" ? "ok" : c.status;
+    const label = document.createElement("span"); label.textContent = c.label;
+    const val = document.createElement("span"); val.className = "val"; val.textContent = c.value;
+    const basis = document.createElement("span"); basis.className = "basis"; basis.textContent = c.basis;
+    li.append(pill, label, val, basis); return li;
+  }));
+  const mat = MATERIALS[m.material];
+  $("limits").textContent = `${mat.label}: self-weight limit ${Math.round(s.heightLimit)} m at ${m.gravity} g; slenderness up to 1:${Number.isFinite(s.slendernessLimit) ? s.slendernessLimit.toFixed(1) : "—"}. ` +
+    `Capped: ${s.binding.slenderness} by slenderness, ${s.binding.core} by lift-core width, ${s.binding.material} by material.` +
+    (mat.speculative ? " This material is speculative." : "");
+}
+
+// ------------------------------------------------------------ controls
+const range = () => frequencyRange(params.plate, params.fundamentalHz ?? PLATES[params.plate].defaultFundamental);
+const toSlider = (f) => { const [a, b] = range(); return Math.round(1000 * Math.log(f / a) / Math.log(b / a)); };
+const fromSlider = (v) => { const [a, b] = range(); return a * Math.pow(b / a, v / 1000); };
+function syncControls() {
+  const [a, b] = range();
+  params.frequency = Math.min(b, Math.max(a, params.frequency));
+  $("freq-range").value = toSlider(params.frequency);
+  if (document.activeElement !== $("freq-num")) $("freq-num").value = +params.frequency.toFixed(1);
+  $("freq-range-label").textContent = `${fmtHz(a)}–${fmtHz(b)} Hz`;
+  for (const b2 of $("preset-seg").children) b2.setAttribute("aria-pressed", b2.dataset.v === params.preset);
+  for (const b2 of $("plate-seg").children) b2.setAttribute("aria-pressed", b2.dataset.v === params.plate);
+  $("seed").value = params.seed; $("q").value = params.Q; $("inverse").checked = params.inverse;
+  const pr = PRESETS[params.preset];
+  $("gravity").placeholder = pr.gravity; $("gravity").value = params.gravity ?? "";
+  $("fund").placeholder = PLATES[params.plate].defaultFundamental; $("fund").value = params.fundamentalHz ?? "";
+  $("drive").placeholder = params.plate === "square" ? 0 : 0.37; $("drive").value = params.driveOffset ?? "";
+  $("azimuthal").value = params.azimuthal ?? "";
+  $("azimuthal-wrap").hidden = params.plate !== "sphere";
+  const sel = $("material");
+  if (!sel.options.length) {
+    sel.append(new Option("Preset default", ""));
+    for (const [k, v] of Object.entries(MATERIALS)) sel.append(new Option(v.label, k));
+  }
+  sel.options[0].text = `Preset default (${MATERIALS[pr.material].label})`;
+  sel.value = params.material ?? "";
+  $("hud-freq").textContent = fmtHz(params.frequency);
+  setTone();
+}
+const numOrNull = (el, lo, hi) => { const v = parseFloat(el.value); return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : null; };
+$("freq-range").addEventListener("input", (e) => { params.frequency = +fromSlider(+e.target.value).toFixed(1); regenerate(260); });
+$("freq-num").addEventListener("change", (e) => { const v = parseFloat(e.target.value); if (v > 0) { params.frequency = v; regenerate(0); } });
+$("preset-seg").addEventListener("click", (e) => { const v = e.target.closest("button")?.dataset.v; if (v && v !== params.preset) { params.preset = v; params.gravity = null; params.material = null; regenerate(0); } });
+$("plate-seg").addEventListener("click", (e) => { const v = e.target.closest("button")?.dataset.v; if (v && v !== params.plate) { params.plate = v; params.fundamentalHz = null; params.driveOffset = null; params.azimuthal = null; regenerate(0); } });
+$("seed").addEventListener("change", (e) => { params.seed = Math.max(0, parseInt(e.target.value, 10) || 0); regenerate(0); });
+$("reroll").addEventListener("click", () => { params.seed = Math.floor(Math.random() * 1e6); regenerate(0); });
+$("q").addEventListener("change", (e) => { params.Q = numOrNull(e.target, 2, 1000) ?? 30; regenerate(0); });
+$("inverse").addEventListener("change", (e) => { params.inverse = e.target.checked; regenerate(0); });
+$("gravity").addEventListener("change", (e) => { params.gravity = numOrNull(e.target, 0.05, 5); regenerate(0); });
+$("material").addEventListener("change", (e) => { params.material = e.target.value || null; regenerate(0); });
+$("fund").addEventListener("change", (e) => { params.fundamentalHz = numOrNull(e.target, 1, 2000); regenerate(0); });
+$("drive").addEventListener("change", (e) => { params.driveOffset = numOrNull(e.target, 0, 0.95); regenerate(0); });
+$("azimuthal").addEventListener("change", (e) => { const v = numOrNull(e.target, 0, 48); params.azimuthal = v == null ? null : Math.round(v); regenerate(0); });
+$("sheet-toggle").addEventListener("click", () => {
+  const p = $("panel"); const c = p.classList.toggle("collapsed");
+  $("sheet-toggle").setAttribute("aria-expanded", String(!c));
+  resize();
+});
+
+// tap a building for its details
+let downAt = null;
+canvas.addEventListener("pointerdown", (e) => { downAt = [e.clientX, e.clientY]; });
+canvas.addEventListener("pointerup", (e) => {
+  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 6 || !layout) return;
+  const r = canvas.getBoundingClientRect();
+  const ray = new THREE.Raycaster();
+  ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  const hit = ray.intersectObjects(pickTargets, false)[0];
+  const box = $("pick");
+  if (!hit || hit.instanceId == null) { box.hidden = true; return; }
+  const b = layout.buildings[hit.object.userData.index[hit.instanceId]];
+  const zone = { core: "Core (antinode crest)", mixed: "Mixed use", residential: "Residential", green: "Green" }[b.zone];
+  const rows = [["Height", `${b.h.toFixed(0)} m`], ["Floors", b.floors], ["Footprint", `${b.w.toFixed(0)} × ${b.d.toFixed(0)} m`],
+    ["Slenderness", `1:${(b.h / Math.min(b.w, b.d)).toFixed(1)}`], ["Amplitude", b.amp.toFixed(2)], ["Phase", b.polarity > 0 ? "+" : "−"]];
+  box.replaceChildren();
+  const t = document.createElement("b"); t.textContent = `${b.landmark ? "Landmark · " : ""}${zone}`;
+  const dl = document.createElement("dl");
+  for (const [k, v] of rows) { const dt = document.createElement("dt"); dt.textContent = k; const dd = document.createElement("dd"); dd.textContent = v; dl.append(dt, dd); }
+  box.append(t, dl); box.hidden = false;
+});
+
+// drive tone
+let audio = null, osc = null, gain = null, toneOn = false;
+function setTone() {
+  if (osc) osc.frequency.setTargetAtTime(params.frequency, audio.currentTime, 0.03);
+}
+$("tone").addEventListener("click", async () => {
+  try {
+    if (!audio) { audio = new (window.AudioContext || window.webkitAudioContext)(); }
+    await audio.resume();
+    toneOn = !toneOn;
+    if (toneOn) {
+      osc = audio.createOscillator(); gain = audio.createGain();
+      osc.type = "sine"; osc.frequency.value = params.frequency;
+      gain.gain.value = 0; gain.gain.setTargetAtTime(0.07, audio.currentTime, 0.05);
+      osc.connect(gain).connect(audio.destination); osc.start();
+    } else if (osc) {
+      gain.gain.setTargetAtTime(0, audio.currentTime, 0.05); const o = osc; setTimeout(() => o.stop(), 300); osc = null;
+    }
+    $("tone").setAttribute("aria-pressed", String(toneOn));
+  } catch { $("status").textContent = "Sound could not start in this view."; }
+});
+
+// saving files
+let downloads = null;
+const saveButtons = [$("save-model"), $("save-png")];
+saveButtons.forEach((b) => (b.disabled = true));
+$("status").textContent = "Checking whether this view can save files…";
+(async () => {
+  try { downloads = await window.claude?.use?.("downloads"); } catch { downloads = null; }
+  saveButtons.forEach((b) => (b.disabled = !downloads));
+  $("status").textContent = downloads ? "" : "Saving files isn't available in this view.";
+})();
+const baseName = () => `cymatic-${layout.meta.preset}-${layout.meta.plate}-${fmtHz(layout.meta.frequency)}Hz-seed${layout.meta.seed}`;
+async function offer(filename, data) {
+  try { await downloads.save({ filename, data }); $("status").textContent = `Saved ${filename}.`; }
+  catch (err) {
+    const why = { declined: "Save cancelled.", too_large: "That file is too large to save here.", rate_limited: "A save is already waiting for an answer." }[err?.code];
+    $("status").textContent = why ?? "Saving isn't available in this view.";
+  }
+}
+$("save-model").addEventListener("click", () => {
+  if (!layout) return;
+  const m = layout.meta, s = layout.stats;
+  const readme = [`Cymatic City Engine ${m.engine}`, ``,
+    `Frequency: ${m.frequency} Hz (${m.note}) on a ${m.plateLabel.toLowerCase()}`, `Settlement: ${m.presetLabel}, seed ${m.seed}, Q ${m.Q}, gravity ${m.gravity} g, ${m.materialLabel}`,
+    `Dominant mode: ${m.dominant} (${m.symmetry})`, ``,
+    `${s.buildings} buildings, ${s.roadLengthKm.toFixed(1)} km of streets, about ${s.population} residents and ${s.jobs} jobs.`, ``,
+    `city.obj: Wavefront OBJ in metres, y up. One object per building (prisms) and per road segment (flat strips).`,
+    `layout.json: every road segment, building (position, up, forward, width, depth, height, floors, zone, phase) and tree, plus stats and checks.`,
+    `Same settings + same seed reproduce this layout exactly.`].join("\n");
+  const zip = zipStore([{ name: "city.obj", text: toOBJ(layout) }, { name: "layout.json", text: toJSON(layout) }, { name: "README.txt", text: readme }]);
+  offer(`${baseName()}.zip`, new Blob([zip]));
+});
+$("save-png").addEventListener("click", () => {
+  if (!layout) return;
+  renderer.render(scene, camera);
+  canvas.toBlob((blob) => blob ? offer(`${baseName()}.png`, blob) : ($("status").textContent = "The image could not be captured."), "image/png");
+});
+
+regenerate(0);
+</script>

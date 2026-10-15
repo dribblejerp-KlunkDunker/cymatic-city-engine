@@ -239,6 +239,10 @@ export const MATERIALS = {
   biocomposite: { label: 'Grown bio-composite (speculative)', sigma: 60e6, rho: 1500, speculative: true },
 };
 export const SAFETY_FACTOR = 3;
+// Above this many floors a building needs lifts; a lift-and-stair core plus a usable ring needs about 14 m.
+export const CORE_FLOORS = 6, MIN_CORE_SIDE = 14;
+// Share of an arcology's terrace volume that is usable floor; the rest is atria and light wells.
+export const ARCOLOGY_USABLE = 0.25;
 
 export const PRESETS = {
   town: {
@@ -693,7 +697,7 @@ export function generateCity(input = {}) {
 
   const buildings = [], trees = [];
   let greenLots = 0, roadLots = 0, accessLots = 0;
-  const binding = { material: 0, slenderness: 0 };
+  const binding = { material: 0, slenderness: 0, core: 0 };
 
   const frame = (P, u, v) => {
     const up = upAt(dom, P);
@@ -709,7 +713,9 @@ export function generateCity(input = {}) {
 
   if (pr.arcology) {
     // One continuous terraced structure; nodal lines are open canyons, antinodes rise highest.
-    const H = Math.min(pr.designHeight, hMat);
+    // On a sphere the terraces form a shell; keep it under a quarter of the radius so it stays a crust, not spikes.
+    const shellCap = dom.kind === 'sphere' ? 0.25 * dom.Rs : Infinity;
+    const H = Math.min(pr.designHeight, hMat, shellCap);
     const step = pr.terraceFloors * pr.floorH;
     const lots = lotCandidates(dom, pr.lot, rng, 0);
     const foot = dom.kind === 'plane' ? pr.lot * 0.97 : pr.lot * 0.58;
@@ -719,8 +725,9 @@ export function generateCity(input = {}) {
       const c = hash.clearance(P);
       if (c < (dom.kind === 'plane' ? foot * 0.71 : foot * 0.71) + 1) { roadLots++; continue; }
       if (amp < 0.06) { greenLots++; trees.push({ pos: P, up: upAt(dom, P), s: 1 + rng() }); continue; }
-      let h = Math.max(step, Math.round((H * Math.pow(amp, 1.15)) / step) * step);
-      if (h > hMat) { h = Math.floor(hMat / step) * step; binding.material++; }
+      const hTop = Math.max(step, Math.floor(H / step) * step);
+      let h = clamp(Math.round((pr.designHeight * Math.pow(amp, 1.15)) / step) * step, step, hTop);
+      if (h === hTop && pr.designHeight * Math.pow(amp, 1.15) > hTop + step / 2 && H === hMat) binding.material++;
       const { up, fwd } = frame(P, u, v);
       buildings.push({
         pos: P, up, fwd, w: foot, d: foot, h, floors: Math.round(h / pr.floorH), zone: zoneOf(amp),
@@ -836,6 +843,13 @@ export function generateCity(input = {}) {
         if (side > Math.min(b.w, b.d)) { b.w = Math.max(b.w, side); b.d = Math.max(b.d, side); }
         if (h > slender * Math.min(b.w, b.d)) { h = slender * Math.min(b.w, b.d); binding.slenderness++; }
       }
+      // a building over six floors needs a lift-and-stair core plus usable floor around it
+      if (h > CORE_FLOORS * pr.floorH && Math.min(b.w, b.d) < MIN_CORE_SIDE) {
+        let side = MIN_CORE_SIDE;
+        const ok = side / Math.SQRT2 <= b.hdCell && fits(b.pos, b.up, b.fwd, Math.max(b.w, side), Math.max(b.d, side));
+        if (ok) { b.w = Math.max(b.w, side); b.d = Math.max(b.d, side); }
+        else { h = Math.min(h, CORE_FLOORS * pr.floorH); binding.core++; }
+      }
       if (h > hMat) { h = hMat; binding.material++; }
       b.floors = Math.max(1, Math.floor(h / pr.floorH + 1e-9));
       b.h = b.shape === 'dome' ? Math.max(Math.min(h, b.floors * pr.floorH), Math.min(h, pr.floorH)) : b.floors * pr.floorH;
@@ -852,9 +866,9 @@ export function generateCity(input = {}) {
   for (const b of buildings) {
     const area = b.w * b.d * (shapeVolume[b.shape] ?? 1);
     footprint += b.w * b.d;
-    const g = area * b.floors * 0.7; // 0.7 net-to-gross (circulation 30 % or more)
+    const g = area * b.floors * 0.7 * (pr.arcology ? ARCOLOGY_USABLE : 1); // 0.7 net-to-gross (circulation 30 % or more)
     gfa += g;
-    resGfa += g * (pr.arcology ? 0.6 : resShare[b.zone] ?? 0.5);
+    resGfa += g * (pr.arcology ? 0.75 : resShare[b.zone] ?? 0.5);
     maxH = Math.max(maxH, b.h);
   }
   const population = Math.round(resGfa / 45);    // 45 m² net per resident (assumption)
@@ -998,4 +1012,55 @@ export function toJSON(layout) {
   const { field, timingMs, ...rest } = layout;
   void field; void timingMs;
   return JSON.stringify(rest);
+}
+
+// Field only (no city) — for painting the plate under the city and the 2D sand figure.
+export function fieldPreview(input = {}) {
+  const p = resolveParams(input);
+  const resp = drivenResponse(enumerateModes(p), p.frequency, p.Q);
+  const field = makeField(p.plate, resp.active);
+  const dom = makeDomain(p);
+  sampleGrid(dom, field);
+  return {
+    at: field.at, toNorm: dom.toNorm, toWorld: dom.toWorld, inside: dom.inside,
+    kind: dom.kind, shape: dom.shape, extent: dom.extent, Rs: dom.Rs ?? null, lo: dom.lo, hi: dom.hi,
+  };
+}
+
+// ---------------------------------------------------------------- zip (store only)
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+  return t;
+})();
+export function crc32(bytes) {
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) crc = CRC_TABLE[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+// files: [{ name, text }] → Uint8Array of a valid .zip (no compression, UTF-8 names)
+export function zipStore(files) {
+  const enc = new TextEncoder();
+  const entries = files.map((f) => ({ name: enc.encode(f.name), data: f.bytes ?? enc.encode(f.text) }));
+  const date = ((2026 - 1980) << 9) | (1 << 5) | 1, time = 0;
+  let size = 22;
+  for (const e of entries) size += 30 + e.name.length + e.data.length + 46 + e.name.length;
+  const out = new Uint8Array(size), dv = new DataView(out.buffer);
+  let o = 0;
+  const u16 = (v) => { dv.setUint16(o, v, true); o += 2; }, u32 = (v) => { dv.setUint32(o, v >>> 0, true); o += 4; };
+  for (const e of entries) {
+    e.crc = crc32(e.data); e.offset = o;
+    u32(0x04034b50); u16(20); u16(0x0800); u16(0); u16(time); u16(date);
+    u32(e.crc); u32(e.data.length); u32(e.data.length); u16(e.name.length); u16(0);
+    out.set(e.name, o); o += e.name.length; out.set(e.data, o); o += e.data.length;
+  }
+  const cd = o;
+  for (const e of entries) {
+    u32(0x02014b50); u16(20); u16(20); u16(0x0800); u16(0); u16(time); u16(date);
+    u32(e.crc); u32(e.data.length); u32(e.data.length); u16(e.name.length); u16(0); u16(0); u16(0); u16(0); u32(0); u32(e.offset);
+    out.set(e.name, o); o += e.name.length;
+  }
+  const cdSize = o - cd;
+  u32(0x06054b50); u16(0); u16(0); u16(entries.length); u16(entries.length); u32(cdSize); u32(cd); u16(0);
+  return out;
 }
