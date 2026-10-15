@@ -1,0 +1,10 @@
+{
+  "name": "cymatic-city-engine",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "build": "node build.mjs"
+  }
+}
