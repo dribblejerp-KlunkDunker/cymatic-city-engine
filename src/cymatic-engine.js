@@ -246,7 +246,7 @@ export const PRESETS = {
     widths: { boulevard: 12, ring: 9, spoke: 7, wall: 10 }, material: 'masonry', slender: 4, gravity: 1, style: 'town',
   },
   city: {
-    label: 'City', radius: 3000, lot: 40, floorH: 3.4, floors: [3, 14], coreFloors: 120, streetSpacing: 110,
+    label: 'City', radius: 3000, lot: 40, floorH: 3.4, floors: [4, 24], coreFloors: 120, streetSpacing: 110,
     widths: { boulevard: 30, ring: 18, spoke: 14, wall: 24 }, material: 'concrete', slender: 10, gravity: 1, style: 'city',
   },
   megastructure: {
@@ -408,33 +408,59 @@ function marchingSquares(g, level) {
 
 // ---------------------------------------------------------------- spatial hash of road segments
 class SegmentHash {
-  constructor(cell) { this.cell = cell; this.map = new Map(); }
-  key(ix, iy, iz) { return `${ix},${iy},${iz}`; }
+  // planar=true hashes on x/z only (all plane-city geometry has y = 0)
+  constructor(cell, planar) { this.cell = cell; this.planar = planar; this.map = new Map(); }
+  key(ix, iy, iz) { return this.planar ? (ix + 32768) * 65536 + (iz + 32768) : ((ix + 1024) * 2048 + (iy + 1024)) * 2048 + (iz + 1024); }
   insert(seg) {
     const c = this.cell, a = seg.a, b = seg.b, r = seg.w / 2;
+    if (seg.mx === undefined) {
+      Object.defineProperties(seg, {
+        mx: { value: (a[0] + b[0]) / 2 }, my: { value: (a[1] + b[1]) / 2 }, mz: { value: (a[2] + b[2]) / 2 },
+        reach: { value: Math.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2 + (b[2] - a[2]) ** 2) / 2 + r },
+      });
+    }
     const lo = [Math.min(a[0], b[0]) - r, Math.min(a[1], b[1]) - r, Math.min(a[2], b[2]) - r];
     const hi = [Math.max(a[0], b[0]) + r, Math.max(a[1], b[1]) + r, Math.max(a[2], b[2]) + r];
+    const y0 = this.planar ? 0 : Math.floor(lo[1] / c), y1 = this.planar ? 0 : Math.floor(hi[1] / c);
     for (let x = Math.floor(lo[0] / c); x <= Math.floor(hi[0] / c); x++)
-      for (let y = Math.floor(lo[1] / c); y <= Math.floor(hi[1] / c); y++)
+      for (let y = y0; y <= y1; y++)
         for (let z = Math.floor(lo[2] / c); z <= Math.floor(hi[2] / c); z++) {
           const k = this.key(x, y, z);
           let arr = this.map.get(k); if (!arr) this.map.set(k, (arr = []));
           arr.push(seg);
         }
   }
-  // distance from P to the nearest road edge (negative = on a road); capped at `cell`
-  clearance(P) {
-    const c = this.cell, ix = Math.floor(P[0] / c), iy = Math.floor(P[1] / c), iz = Math.floor(P[2] / c);
+  // distance from P to the nearest road edge (negative = on a road); exact up to `cell`, else returns `cell`
+  clearance(P, stopBelow = -Infinity) {
+    const c = this.cell, ix = Math.floor(P[0] / c), iy = this.planar ? 0 : Math.floor(P[1] / c), iz = Math.floor(P[2] / c);
+    const y0 = this.planar ? 0 : iy - 1, y1 = this.planar ? 0 : iy + 1;
     let best = c;
     for (let x = ix - 1; x <= ix + 1; x++)
-      for (let y = iy - 1; y <= iy + 1; y++)
+      for (let y = y0; y <= y1; y++)
         for (let z = iz - 1; z <= iz + 1; z++) {
           const arr = this.map.get(this.key(x, y, z));
           if (!arr) continue;
-          for (const s of arr) best = Math.min(best, distToSegment(P, s.a, s.b) - s.w / 2);
+          for (const s of arr) {
+            // cheap reject with the segment's bounding sphere before the exact distance
+            const mx = P[0] - s.mx, my = P[1] - s.my, mz = P[2] - s.mz;
+            const lb = Math.sqrt(mx * mx + my * my + mz * mz) - s.reach;
+            if (lb >= best) continue;
+            const dd = segDist(P, s) - s.w / 2;
+            if (dd < best) { best = dd; if (best < stopBelow) return best; }
+          }
         }
     return best;
   }
+}
+function segDist(P, s) {
+  const a = s.a, b = s.b;
+  const abx = b[0] - a[0], aby = b[1] - a[1], abz = b[2] - a[2];
+  const apx = P[0] - a[0], apy = P[1] - a[1], apz = P[2] - a[2];
+  const L2 = abx * abx + aby * aby + abz * abz;
+  let t = L2 > 0 ? (apx * abx + apy * aby + apz * abz) / L2 : 0;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  const dx = apx - abx * t, dy = apy - aby * t, dz = apz - abz * t;
+  return Math.sqrt(dx * dx + dy * dy + dz * dz);
 }
 export function distToSegment(P, A, B) {
   const ab = sub(B, A), ap = sub(P, A);
@@ -519,7 +545,7 @@ function buildRoads(p, dom, field, g) {
 
   // 3. gradient spokes (minor hyperstreamlines) from the nodal lines toward the antinodes
   let spokeSpacing = null;
-  if (!pr.arcology && dom.kind === 'plane') {
+  if (!pr.arcology) {
     const base = roads.slice();
     const seeds = base.filter((r) => r.kind === 'boulevard').map((r) => scale3(add(r.a, r.b), 0.5));
     let dsep = pr.streetSpacing * 2.5;
@@ -557,12 +583,12 @@ function buildRoads(p, dom, field, g) {
 function traceSpokes(dom, field, seeds, dsep, pr) {
   const out = [];
   const accepted = new Map(), cellA = dsep;
-  const key = (P, c) => `${Math.floor(P[0] / c)},${Math.floor(P[2] / c)}`;
+  const key = (P, c) => `${Math.floor(P[0] / c)},${Math.floor(P[1] / c)},${Math.floor(P[2] / c)}`;
   const near = (map, P, c, r) => {
-    const ix = Math.floor(P[0] / c), iz = Math.floor(P[2] / c);
-    for (let x = ix - 1; x <= ix + 1; x++) for (let z = iz - 1; z <= iz + 1; z++) {
-      const arr = map.get(`${x},${z}`); if (!arr) continue;
-      for (const q of arr) if (Math.hypot(q[0] - P[0], q[2] - P[2]) < r) return q;
+    const ix = Math.floor(P[0] / c), iy = Math.floor(P[1] / c), iz = Math.floor(P[2] / c);
+    for (let x = ix - 1; x <= ix + 1; x++) for (let y = iy - 1; y <= iy + 1; y++) for (let z = iz - 1; z <= iz + 1; z++) {
+      const arr = map.get(`${x},${y},${z}`); if (!arr) continue;
+      for (const q of arr) if (len3(sub(q, P)) < r) return q;
     }
     return null;
   };
@@ -580,14 +606,15 @@ function traceSpokes(dom, field, seeds, dsep, pr) {
       for (let step = 0; step < maxSteps; step++) {
         const gw = gradWorld(dom, field, u, v), gl = len3(gw);
         if (gl < 1e-12) break;
-        const Pn = add(P, scale3(gw, (dir * ds) / gl));
+        let Pn = add(P, scale3(gw, (dir * ds) / gl));
+        if (dom.kind === 'sphere') Pn = scale3(norm3(Pn), dom.Rs);
         const [un, vn] = dom.toNorm(Pn);
         if (!dom.inside(un * 1.02, vn * 1.02)) break;
         const sn = field.S(un, vn);
         if (step > 1 && dir * sn < 0) break;
         if (Math.abs(sn) < prev - 1e-4) break;   // passed the crest
         const hit = step > 2 ? near(spokePts, Pn, cellS, dsep * 0.35) : null;
-        if (hit) { path.push([hit[0], 0, hit[2]]); break; } // merge into an existing spoke
+        if (hit) { path.push(hit); break; } // merge into an existing spoke
         path.push(Pn);
         P = Pn; u = un; v = vn; prev = Math.abs(sn);
         if (prev > 0.9) break;                     // leave a plaza at the antinode
@@ -641,13 +668,15 @@ export function generateCity(input = {}) {
   const rd = buildRoads(p, dom, field, grid);
   const maxW = Math.max(...Object.values(pr.widths));
   const access = pr.arcology ? Infinity : pr.streetSpacing * 0.8; // every building within reach of a street
-  const hash = new SegmentHash(Math.max(pr.lot * 2.5, pr.arcology ? pr.lot * 2 : access) + maxW);
-  for (const r of rd.roads) hash.insert(r);
+  const planar = dom.kind === 'plane';
+  const hash = new SegmentHash(pr.lot * 1.6 + maxW, planar);          // footprint fitting
+  const reach = new SegmentHash((pr.arcology ? pr.lot : access) + maxW, planar); // walking reach
+  for (const r of rd.roads) { hash.insert(r); reach.insert(r); }
 
   const rng = mulberry32(p.seed * 2654435761 + 17);
   const hMat = heightLimit(p.material, p.gravity);
   const slender = pr.arcology ? Infinity : slendernessLimit(pr.slender, p.gravity);
-  const setback = pr.arcology ? 2 : Math.max(2, pr.lot * 0.1);
+  const setback = pr.arcology ? 2 : 1.5; // metres from the road edge (sidewalks are inside road widths)
 
   const districtAt = (u, v) => {
     let i, j;
@@ -660,7 +689,7 @@ export function generateCity(input = {}) {
     }
     return districts.label[clamp(i, 0, grid.ni) * grid.W + clamp(j, 0, grid.nj)];
   };
-  const zoneOf = (amp) => (amp >= 0.72 ? 'core' : amp >= 0.42 ? 'mixed' : amp >= 0.18 ? 'residential' : 'green');
+  const zoneOf = (amp) => (amp >= 0.72 ? 'core' : amp >= 0.42 ? 'mixed' : amp >= 0.12 ? 'residential' : 'green');
 
   const buildings = [], trees = [];
   let greenLots = 0, roadLots = 0, accessLots = 0;
@@ -699,6 +728,25 @@ export function generateCity(input = {}) {
       });
     }
   } else {
+    // Does a w×d footprint centred at P (long side along fwd) keep `setback` from every road edge?
+    // Boundary samples ≤ 4 m apart catch any road (narrowest half-width 3.5 m) that crosses the outline.
+    const fits = (P, up, fwd, w, d) => {
+      const right = cross(fwd, up);
+      const nx = Math.max(1, Math.ceil(w / 4)), nz = Math.max(1, Math.ceil(d / 4));
+      const at = (x, z) => add(add(P, scale3(fwd, x)), scale3(right, z));
+      const bad = (Q) => hash.clearance(Q, setback) < setback;
+      if (bad(P)) return false;
+      for (let i = 0; i <= nx; i++) {
+        const x = -w / 2 + (w * i) / nx;
+        if (bad(at(x, d / 2)) || bad(at(x, -d / 2))) return false;
+      }
+      for (let k = 1; k < nz; k++) {
+        const z = -d / 2 + (d * k) / nz;
+        if (bad(at(w / 2, z)) || bad(at(-w / 2, z))) return false;
+      }
+      return true;
+    };
+
     const placeLot = (lot, size, onlyZone, superlots) => {
       const { P, u, v } = lot;
       const { S, A } = field.at(u, v);
@@ -708,32 +756,39 @@ export function generateCity(input = {}) {
       if (!onlyZone && zone === 'core') return false;
       if (superlots && superlots.near(P, 1.35 * pr.lot)) return false;
       const c = hash.clearance(P);
-      const hdMax = Math.min(c - setback, (dom.kind === 'plane' ? 0.44 : 0.42) * size);
-      if (hdMax < 0.18 * pr.lot) { roadLots++; return true; }
-      if (c > access) { accessLots++; trees.push({ pos: P, up: upAt(dom, P), s: 1 + rng() }); return true; }
+      if (c < setback + 2) { roadLots++; return true; }
+      if (c >= hash.cell && reach.clearance(P) > access) { accessLots++; trees.push({ pos: P, up: upAt(dom, P), s: 1 + rng() }); return true; }
       if (zone === 'green') {
         greenLots++;
         if (rng() < 0.7) trees.push({ pos: P, up: upAt(dom, P), s: 0.8 + rng() * 0.8 });
         return true;
       }
+      // the lot grid guarantees neighbours never overlap while the half-diagonal stays under hdCell
+      const hdCell = (dom.kind === 'plane' ? 0.44 : 0.42) * size;
       const r1 = rng(), r2 = rng(), r3 = rng();
-      let w = size * { core: 0.8, mixed: 0.7, residential: 0.58 }[zone] * (0.9 + 0.2 * r1);
-      let d = zone === 'core' ? w * (0.85 + 0.15 * r2) : w * (0.65 + 0.35 * r2);
+      let w = size * { core: 0.8, mixed: 0.74, residential: 0.66 }[zone] * (0.9 + 0.2 * r1);
+      let d = zone === 'core' ? w * (0.85 + 0.15 * r2) : w * (0.62 + 0.3 * r2);
       const hd = Math.hypot(w, d) / 2;
-      if (hd > hdMax) { const k = hdMax / hd; w *= k; d *= k; }
+      if (hd > hdCell) { const k = hdCell / hd; w *= k; d *= k; }
+      const { up, fwd } = frame(P, u, v);
+      let ok = false;
+      for (let t = 0; t < 7 && w >= 0.25 * pr.lot; t++) {
+        if (fits(P, up, fwd, w, d)) { ok = true; break; }
+        w *= 0.85; d *= 0.85;
+      }
+      if (!ok) { roadLots++; return true; }
       const [f0, f1] = pr.floors;
       let floors;
-      if (zone === 'residential') floors = lerp(f0, f1 * 0.5, clamp((amp - 0.18) / 0.24, 0, 1));
+      if (zone === 'residential') floors = lerp(f0, f1 * 0.5, clamp((amp - 0.12) / 0.3, 0, 1));
       else if (zone === 'mixed') floors = lerp(f1 * 0.5, f1, clamp((amp - 0.42) / 0.3, 0, 1));
       else floors = lerp(f1, pr.coreFloors, Math.pow(clamp((amp - 0.72) / 0.28, 0, 1), 1.4));
       floors = Math.max(1, Math.round(floors * (0.8 + 0.4 * r3)));
       let shape = zone === 'core' ? 'tower' : 'block';
       if (pr.style === 'alien') shape = zone === 'core' ? 'spire' : zone === 'mixed' ? (r1 < 0.5 ? 'pod' : 'dome') : 'dome';
       if (pr.style === 'town' && zone !== 'core') shape = 'house';
-      const { up, fwd } = frame(P, u, v);
       buildings.push({
         pos: P, up, fwd, w, d, h: 0, floors, zone, shape, polarity: S >= 0 ? 1 : -1, amp,
-        district: districtAt(u, v), landmark: false, hdMax,
+        district: districtAt(u, v), landmark: false, hdCell,
       });
       return true;
     };
@@ -769,23 +824,22 @@ export function generateCity(input = {}) {
     }
     for (const b of best.values()) { b.landmark = true; b.floors = Math.round(b.floors * 1.3); }
 
-    // structural limits: widen toward the slenderness rule where the lot allows, else cap
+    // structural limits: widen toward the slenderness rule where the lot allows, else cap the height
     for (const b of buildings) {
       let h = b.floors * pr.floorH;
       if (b.shape === 'dome') h = Math.min(h, 0.6 * Math.min(b.w, b.d));
       if (h > slender * Math.min(b.w, b.d)) {
-        const need = h / slender, maxSide = b.hdMax / Math.SQRT2;
-        if (need <= maxSide) { b.w = Math.max(b.w, need); b.d = Math.max(b.d, need); }
-        else {
-          const side = maxSide; b.w = Math.max(b.w, Math.min(side, b.w)); b.d = Math.max(b.d, Math.min(side, b.d));
-          h = slender * Math.min(b.w, b.d); binding.slenderness++;
-        }
+        const need = h / slender;
+        // widest square (or the current long side) that still fits the lot and clears the roads
+        let side = Math.min(need, b.hdCell / Math.SQRT2);
+        while (side > Math.min(b.w, b.d) && !fits(b.pos, b.up, b.fwd, Math.max(b.w, side), Math.max(b.d, side))) side *= 0.93;
+        if (side > Math.min(b.w, b.d)) { b.w = Math.max(b.w, side); b.d = Math.max(b.d, side); }
+        if (h > slender * Math.min(b.w, b.d)) { h = slender * Math.min(b.w, b.d); binding.slenderness++; }
       }
       if (h > hMat) { h = hMat; binding.material++; }
       b.floors = Math.max(1, Math.floor(h / pr.floorH + 1e-9));
-      b.h = b.shape === 'dome' ? Math.min(h, b.floors * pr.floorH) : b.floors * pr.floorH;
-      if (b.shape === 'dome' && b.h < pr.floorH) b.h = Math.min(h, pr.floorH);
-      delete b.hdMax;
+      b.h = b.shape === 'dome' ? Math.max(Math.min(h, b.floors * pr.floorH), Math.min(h, pr.floorH)) : b.floors * pr.floorH;
+      delete b.hdCell;
     }
   }
 
@@ -822,6 +876,7 @@ export function generateCity(input = {}) {
     gfaM2: gfa,
     population, jobs,
     densityPerHa: population / haArea,
+    lotsOnRoads: roadLots, lotsBeyondReach: accessLots, greenLots,
     maxHeight: maxH,
     tallest: buildings.reduce((m, b) => (b.h > (m?.h ?? -1) ? b : m), null)?.floors ?? 0,
     districts: sizable,
@@ -829,7 +884,6 @@ export function generateCity(input = {}) {
     heightLimit: hMat,
     slendernessLimit: slender,
     binding,
-    ms: Date.now() - t0,
   };
   const checks = plausibilityChecks(p, stats);
   const dominant = resp.active[0];
@@ -850,6 +904,7 @@ export function generateCity(input = {}) {
     trees,
     stats,
     checks,
+    timingMs: Date.now() - t0, // excluded from toJSON so identical inputs give identical files
     // not serializable: lets a viewer paint the plate field onto the ground
     field: { at: (u, v) => field.at(u, v), toNorm: dom.toNorm, toWorld: dom.toWorld },
   };
@@ -940,7 +995,7 @@ export function buildingMesh(b) {
 
 // Plain-data copy of a layout (drops the field functions).
 export function toJSON(layout) {
-  const { field, ...rest } = layout;
-  void field;
+  const { field, timingMs, ...rest } = layout;
+  void field; void timingMs;
   return JSON.stringify(rest);
 }
