@@ -99,6 +99,14 @@ test('Q reaches the city: a sharper resonance gives a sharper plan', () => {
   assert.notEqual(JSON.stringify(lo.roads), JSON.stringify(hi.roads));
 });
 
+test('every measured realism check that is a hard rule passes (walking reach, setback, slenderness, self-weight, terraces)', () => {
+  const hard = ['access', 'setback', 'slenderness', 'self-weight', 'terrace'];
+  for (const plate of PLATES) for (const preset of Object.keys(PRESETS)) for (const f of [plate === 'square' ? 20 : 45, 432]) {
+    const L = city({ plate, preset, frequency: f });
+    for (const c of L.checks.filter((x) => hard.includes(x.id))) assert.equal(c.status, 'pass', `${plate}/${preset}/${f}: ${c.id} ${c.value}`);
+  }
+});
+
 test('the lowest modes still get a connected street plan', () => {
   for (const [plate, f] of [['circle', 40], ['square', 5], ['sphere', 30]]) {
     const L = generateCity({ plate, preset: 'city', frequency: f });

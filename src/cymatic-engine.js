@@ -301,7 +301,7 @@ export function resolveParams(input = {}) {
   const frequency = num(input.frequency ?? 432, 'Frequency');
   if (!(frequency > 0)) throw new Error('Frequency must be a positive number of hertz');
   const [lo, hi] = frequencyRange(plate, fundamentalHz);
-  if (frequency < lo * (1 - 1e-9) || frequency > hi * (1 + 1e-9)) {
+  if (frequency < lo - 0.01 || frequency > hi + 0.01) {
     throw new Error(`${frequency} Hz is outside this plate's modelled range (${lo.toFixed(1)}–${hi.toFixed(1)} Hz). Change the lowest-mode frequency to move the range.`);
   }
   const driveOffset = num(input.driveOffset ?? (plate === 'square' ? 0 : 0.37), 'Drive point');
@@ -309,7 +309,7 @@ export function resolveParams(input = {}) {
   const az = input.azimuthal ?? 'auto';
   if (az !== 'auto' && !(Number.isInteger(az) && az >= 0)) throw new Error('Sphere meridian count must be "auto" or a whole number ≥ 0');
   return {
-    frequency, plate, presetKey, preset, fundamentalHz, driveOffset, azimuthal: az,
+    frequency: clamp(frequency, lo, hi), plate, presetKey, preset, fundamentalHz, driveOffset, azimuthal: az,
     seed: (input.seed ?? 1) >>> 0,
     Q: clamp(num(input.Q ?? 100, 'Q'), 2, 1000),
     gravity: clamp(num(input.gravity ?? preset.gravity, 'Gravity'), 0.05, 5),
@@ -897,7 +897,7 @@ export function generateCity(input = {}) {
       if (superlots && superlots.near(P, 1.35 * pr.lot)) return false;
       const c = hash.clearance(P);
       if (c < setback + 2) { roadLots++; return true; }
-      if (c >= hash.cell && reach.clearance(P) > access) { accessLots++; trees.push({ pos: P, up: upAt(dom, P), s: 1 + rng() }); return true; }
+      if (reach.clearance(P, -Infinity) > access) { accessLots++; trees.push({ pos: P, up: upAt(dom, P), s: 1 + rng() }); return true; }
       if (zone === 'green') {
         greenLots++;
         if (rng() < 0.7) trees.push({ pos: P, up: upAt(dom, P), s: 0.8 + rng() * 0.8 });

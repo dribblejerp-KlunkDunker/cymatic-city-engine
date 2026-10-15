@@ -128,3 +128,14 @@ test('higher Q sharpens the pattern; low Q spreads the response over more modes'
   const onMode = drivenResponse(modes, modes.find((m) => m.m === 4 && m.n === 3).f, 500);
   assert.ok(onMode.sharpness > 0.99);
 });
+
+test('the response normalises each mode by its norm ∫φ² before comparing and summing', () => {
+  // two modes at the same frequency whose normalised shapes take the same value at the drive point
+  const modes = [{ plate: 'circle', m: 0, n: 1, f: 100, coupling: 2, norm: 4 }, { plate: 'circle', m: 1, n: 1, f: 100, coupling: 1, norm: 1 }];
+  const r = drivenResponse(modes, 100, 50);
+  assert.equal(r.active.length, 2);
+  close(r.active[0].weight, 1, 1e-12); close(r.active[1].weight, 1, 1e-12);
+  // field coefficients return to the un-normalised shapes: c / √N
+  const a = r.active.find((x) => x.m === 0), b = r.active.find((x) => x.m === 1);
+  close(Math.hypot(a.cr, a.ci) / Math.hypot(b.cr, b.ci), 0.5, 1e-12);
+});
