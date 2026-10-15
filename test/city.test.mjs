@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   generateCity, toJSON, toOBJ, buildingMesh, heightLimit, slendernessLimit, distToSegment, PRESETS,
+  enumerateModes, besselZeros,
 } from '../src/cymatic-engine.js';
 
 const cache = new Map();
@@ -61,6 +62,48 @@ test('boulevards lie on the nodal lines of the field (|S| ≈ 0)', () => {
       worst = Math.max(worst, Math.abs(L.field.at(u, v).S));
     }
     assert.ok(worst < 0.03, `${plate}: worst |S| on a boulevard ${worst}`);
+  }
+});
+
+test('at a pure resonance the boulevards fall on the analytic nodal set (independent of the engine field)', () => {
+  // circle (3,2): nodal diameters where cos 3θ = 0, a nodal circle at r = j31/j32, and the rim
+  const md = enumerateModes({ plate: 'circle' }).find((m) => m.m === 3 && m.n === 2);
+  const L = generateCity({ plate: 'circle', preset: 'town', frequency: md.f, Q: 1000 });
+  assert.equal(L.meta.dominant, '(m 3, n 2)');
+  const R = L.meta.world.extent, rc = besselZeros(3, 2)[0] / besselZeros(3, 2)[1];
+  for (const r of L.roads.filter((x) => x.kind === 'boulevard')) {
+    const rr = Math.hypot(r.a[0], r.a[2]) / R, th = Math.atan2(r.a[2], r.a[0]);
+    const onDiam = Math.abs(Math.cos(3 * th)) * rr < 0.02, onCircle = Math.abs(rr - rc) < 0.02, onRim = rr > 0.97;
+    assert.ok(onDiam || onCircle || onRim, `boulevard point r=${rr.toFixed(3)} θ=${th.toFixed(3)} is off the nodal set`);
+  }
+  // square at the (0,1) frequency, off-centre drive: the degenerate pair (0,1)± is excited in the ratio
+  // φ±(drive)/N±. Rebuild that field here from the textbook shapes and check boulevards sit on its zeros.
+  const sq = generateCity({ plate: 'square', preset: 'town', frequency: 5, Q: 1000, driveOffset: 0.3 });
+  const shape = (s, x, y) => Math.cos(Math.PI * x) + s * Math.cos(Math.PI * y);   // (0,1)±, corner coords
+  const dx = 0.5 + 0.5 * 0.3, dy = 0.5 + 0.31 * 0.3;                              // drive point
+  const g = (x, y) => (shape(1, dx, dy) * shape(1, x, y) + shape(-1, dx, dy) * shape(-1, x, y)) / 2; // N = 2 for both
+  let gmax = 0;
+  for (let i = 0; i <= 50; i++) for (let k = 0; k <= 50; k++) gmax = Math.max(gmax, Math.abs(g(i / 50, k / 50)));
+  const side = 2 * sq.meta.world.extent;
+  const blv = sq.roads.filter((x) => x.kind === 'boulevard');
+  assert.ok(blv.length > 20);
+  for (const r of blv) {
+    const x = r.a[0] / side + 0.5, y = r.a[2] / side + 0.5;
+    assert.ok(Math.abs(g(x, y)) / gmax < 0.02, `square boulevard at (${x.toFixed(3)}, ${y.toFixed(3)}) is off the nodal line`);
+  }
+});
+
+test('Q reaches the city: a sharper resonance gives a sharper plan', () => {
+  const lo = generateCity({ preset: 'town', frequency: 432, Q: 5 }), hi = generateCity({ preset: 'town', frequency: 432, Q: 500 });
+  assert.ok(hi.meta.sharpness > lo.meta.sharpness);
+  assert.notEqual(JSON.stringify(lo.roads), JSON.stringify(hi.roads));
+});
+
+test('the lowest modes still get a connected street plan', () => {
+  for (const [plate, f] of [['circle', 40], ['square', 5], ['sphere', 30]]) {
+    const L = generateCity({ plate, preset: 'city', frequency: f });
+    assert.ok(L.roads.some((r) => r.kind === 'spoke'), `${plate} ${f} Hz has gradient streets`);
+    assert.ok(L.stats.streetDensity > 14, `${plate} ${f} Hz: ${L.stats.streetDensity} km/km²`);
   }
 });
 
@@ -143,6 +186,22 @@ test('buildings over six floors have room for a lift core', () => {
   }
 });
 
+test('the material limit binds when it should (heavy gravity)', () => {
+  const L = generateCity({ preset: 'city', frequency: 300, gravity: 5 });
+  const hMax = heightLimit('concrete', 5);
+  assert.ok(L.stats.binding.material > 0, 'some towers were capped by the material');
+  for (const b of L.buildings) assert.ok(b.h <= hMax + 1e-6);
+});
+
+test('megastructure terraces: seed varies them and no step exceeds the allowed rise', () => {
+  for (const plate of PLATES) {
+    const a = generateCity({ plate, preset: 'megastructure', frequency: 432, seed: 1 });
+    const b = generateCity({ plate, preset: 'megastructure', frequency: 432, seed: 2 });
+    assert.notEqual(JSON.stringify(a.buildings), JSON.stringify(b.buildings), plate);
+    assert.ok(a.stats.maxTerraceStep <= a.stats.terraceRise + 1e-6, `${plate}: step ${a.stats.maxTerraceStep} > ${a.stats.terraceRise}`);
+  }
+});
+
 test('the height limit scales as 1/g', () => {
   const ratio = heightLimit('concrete', 0.38) / heightLimit('concrete', 1);
   assert.ok(Math.abs(ratio - 1 / 0.38) < 1e-9);
@@ -163,10 +222,10 @@ test('sphere cities sit on the sphere with radial up vectors', () => {
 });
 
 test('towns and cities land in a plausible planning range', () => {
-  for (const plate of PLATES) for (const preset of ['town', 'city']) for (const f of [180, 432, 800]) {
+  for (const plate of PLATES) for (const preset of ['town', 'city']) for (const f of [180, 432, 750]) {
     const s = city({ plate, preset, frequency: f }).stats;
-    assert.ok(s.roadShare > 0.12 && s.roadShare < 0.45, `${plate}/${preset}/${f}: road share ${s.roadShare}`);
-    assert.ok(s.streetDensity > 10, `${plate}/${preset}/${f}: street density ${s.streetDensity}`);
+    assert.ok(s.roadShare > (preset === 'town' ? 0.12 : 0.22) && s.roadShare < 0.42, `${plate}/${preset}/${f}: road share ${s.roadShare}`);
+    assert.ok(s.streetDensity > 14, `${plate}/${preset}/${f}: street density ${s.streetDensity}`);
     assert.ok(s.greenShare < 0.4, `${plate}/${preset}/${f}: green ${s.greenShare}`);
     assert.ok(s.buildings > (preset === 'town' ? 300 : 2500), `${plate}/${preset}/${f}: ${s.buildings} buildings`);
   }
@@ -176,6 +235,24 @@ test('a city generates in under 2.5 s', () => {
   const t = Date.now();
   generateCity({ preset: 'city', plate: 'circle', frequency: 517, seed: 99 });
   assert.ok(Date.now() - t < 2500, `${Date.now() - t} ms`);
+});
+
+test('OBJ faces point outward', () => {
+  const L = city({ preset: 'town', frequency: 432 });
+  for (const b of L.buildings.slice(0, 200)) {
+    const { verts, faces } = buildingMesh(b);
+    const c = verts.reduce((s, v) => s.map((x, i) => x + v[i] / verts.length), [0, 0, 0]);
+    for (const f of faces) {
+      const n = [0, 0, 0];
+      for (let i = 0; i < f.length; i++) { // Newell's method
+        const p = verts[f[i]], q = verts[f[(i + 1) % f.length]];
+        n[0] += (p[1] - q[1]) * (p[2] + q[2]); n[1] += (p[2] - q[2]) * (p[0] + q[0]); n[2] += (p[0] - q[0]) * (p[1] + q[1]);
+      }
+      const fc = f.reduce((s, i) => s.map((x, k) => x + verts[i][k] / f.length), [0, 0, 0]);
+      const out = n[0] * (fc[0] - c[0]) + n[1] * (fc[1] - c[1]) + n[2] * (fc[2] - c[2]);
+      assert.ok(out > 0, 'face winds inward');
+    }
+  }
 });
 
 test('OBJ export is well formed', () => {
@@ -194,4 +271,8 @@ test('bad input is rejected with a clear message', () => {
   assert.throws(() => generateCity({ frequency: -5 }), /positive/);
   assert.throws(() => generateCity({ plate: 'hexagon' }), /Unknown plate/);
   assert.throws(() => generateCity({ preset: 'village' }), /Unknown preset/);
+  assert.throws(() => generateCity({ plate: 'circle', frequency: 1e5 }), /outside this plate's modelled range/);
+  assert.throws(() => generateCity({ driveOffset: 1.2 }), /Drive point/);
+  assert.throws(() => generateCity({ gravity: NaN }), /Gravity must be a number/);
+  assert.throws(() => generateCity({ fundamentalHz: -40 }), /above 0/);
 });

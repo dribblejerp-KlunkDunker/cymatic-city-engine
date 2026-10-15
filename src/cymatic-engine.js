@@ -107,16 +107,24 @@ export const PLATES = {
   square: { label: 'Square Chladni plate', defaultFundamental: 5, law: 'f = f₀₁ · (m² + n²) (thin plate, f ∝ k²)' },
   sphere: { label: 'Sphere', defaultFundamental: 30, law: 'f = f₁ · √(l(l+1)/2) (scalar sphere)' },
 };
-const CIRCLE_MAX_M = 30, CIRCLE_MAX_N = 15, SQUARE_MAX = 20, SPHERE_MAX_L = 48;
+const CIRCLE_MAX_M = 40, CIRCLE_MAX_N = 20, SQUARE_MAX = 20, SPHERE_MAX_L = 48;
 
+// Square Chladni plate, corner coordinates x, y ∈ [0, 1]: zero edge slope for every (m, n).
 const squareShape = (m, n, sign, x, y) =>
   Math.cos(n * Math.PI * x) * Math.cos(m * Math.PI * y) + sign * Math.cos(m * Math.PI * x) * Math.cos(n * Math.PI * y);
 
-// Every mode the plate supports, with its frequency and how strongly the drive point couples to it.
+// Where the driver touches each plate, from a 0 (centre / near pole) – 1 (edge / equator side) offset.
+export function drivePoint(plate, d) {
+  if (plate === 'circle') return { r: d, theta: 0 };
+  if (plate === 'square') return { x: 0.5 + 0.5 * d, y: 0.5 + 0.31 * d };
+  return { theta: Math.PI * (0.15 + 0.7 * d), phi: 0 };
+}
+
+// Every mode the plate supports: frequency, mode-shape norm ∫φ² dA, and the shape's value at the drive point.
 export function enumerateModes(opts = {}) {
   const plate = opts.plate ?? 'circle';
   const F = opts.fundamentalHz ?? PLATES[plate].defaultFundamental;
-  const drive = opts.driveOffset ?? (plate === 'square' ? 0 : 0.37);
+  const dp = drivePoint(plate, opts.driveOffset ?? (plate === 'square' ? 0 : 0.37));
   const modes = [];
   if (plate === 'circle') {
     const j01 = besselZeros(0, 1)[0];
@@ -124,26 +132,28 @@ export function enumerateModes(opts = {}) {
       const zs = besselZeros(m, CIRCLE_MAX_N);
       for (let n = 1; n <= CIRCLE_MAX_N; n++) {
         const j = zs[n - 1];
-        // drive point at radius `drive`·R on the θ = 0 axis
-        modes.push({ plate, m, n, j, f: (F * j) / j01, coupling: besselJ(m, j * drive) });
+        // ∫₀¹ J_m(j r)² r dr = J_{m+1}(j)²/2 at a zero of J_m; ∫cos²(mθ) = π (2π for m = 0)
+        const norm = (m === 0 ? 2 * Math.PI : Math.PI) * 0.5 * besselJ(m + 1, j) ** 2;
+        modes.push({ plate, m, n, j, f: (F * j) / j01, norm, coupling: besselJ(m, j * dp.r) * Math.cos(m * dp.theta) });
       }
     }
   } else if (plate === 'square') {
-    const dx = 0.5 * drive, dy = 0.31 * drive; // drive moves from the centre toward the edge
+    const c = (k) => (k === 0 ? 1 : 0.5); // ∫₀¹ cos²(kπx) dx
     for (let n = 1; n <= SQUARE_MAX; n++) {
       for (let m = 0; m <= n; m++) {
         for (const sign of m === n ? [1] : [1, -1]) {
-          modes.push({ plate, m, n, sign, f: F * (m * m + n * n), coupling: squareShape(m, n, sign, dx, dy) });
+          const norm = m === n ? 4 * c(n) * c(n) : 2 * c(m) * c(n);
+          modes.push({ plate, m, n, sign, f: F * (m * m + n * n), norm, coupling: squareShape(m, n, sign, dp.x, dp.y) });
         }
       }
     }
   } else if (plate === 'sphere') {
-    // A perfect sphere's 2l+1 modes are degenerate; a real body splits them. We pick one
-    // azimuthal order m per degree (symmetry-broken sphere) and drive it with unit coupling.
+    // A perfect sphere's 2l+1 modes per degree are degenerate; a real body splits them. We keep one
+    // azimuthal order m per degree (a symmetry-broken sphere) and couple it at the drive point.
     const az = opts.azimuthal;
     for (let l = 1; l <= SPHERE_MAX_L; l++) {
       const m = az == null || az === 'auto' ? Math.round(l * 0.5) : clamp(az | 0, 0, l);
-      modes.push({ plate, l, m, n: l - m, f: (F * Math.sqrt(l * (l + 1))) / Math.SQRT2, coupling: 1 });
+      modes.push({ plate, l, m, n: l - m, f: (F * Math.sqrt(l * (l + 1))) / Math.SQRT2, norm: 1, coupling: realSphericalHarmonic(l, m, dp.theta, dp.phi) });
     }
   } else {
     throw new Error(`Unknown plate "${plate}"`);
@@ -157,34 +167,40 @@ export function modeLabel(md) {
   return `(l ${md.l}, m ${md.m})`;
 }
 
-// Damped, driven modal superposition: a_k = c_k / (f_k² − f² + i f_k f / Q).
-export function drivenResponse(modes, f, Q = 30, opts = {}) {
+// Damped, driven modal superposition. In the orthonormal basis φ̂ = φ/√N each mode's amplitude is
+// α_k = φ̂_k(drive) / (f_k² − f² + i f_k f / Q). The pattern is shown at the phase ψ that holds the
+// most motion (ψ = ½ arg Σα²); what is left over is the quadrature part that blurs the nodal lines.
+export function drivenResponse(modes, f, Q = 100, opts = {}) {
   const keepRatio = opts.keepRatio ?? 0.12, maxModes = opts.maxModes ?? 5;
   const scored = [];
   for (const md of modes) {
     const d = md.f * md.f - f * f, g = (md.f * f) / Q;
     const den = d * d + g * g;
-    const re = (md.coupling * d) / den, im = (-md.coupling * g) / den;
+    const c = md.coupling / Math.sqrt(md.norm);
+    const re = (c * d) / den, im = (-c * g) / den;
     const mag = Math.hypot(re, im);
-    if (mag > 0 && Number.isFinite(mag)) scored.push({ md, re, im, mag });
+    if (mag > 1e-12 * Math.abs(1 / den) && Number.isFinite(mag)) scored.push({ md, re, im, mag });
   }
   scored.sort((a, b) => b.mag - a.mag);
-  if (!scored.length) throw new Error('No mode couples to this drive point');
+  if (!scored.length) throw new Error('The drive point sits on a node of every mode; move the drive point');
   const top = scored[0];
-  const psi = Math.atan2(top.im, top.re);
-  const c = Math.cos(psi), s = Math.sin(psi);
-  const active = [];
+  const kept = [];
   for (const sc of scored) {
-    if (active.length >= maxModes || sc.mag < keepRatio * top.mag) break;
-    active.push({
-      ...sc.md,
-      weight: sc.mag / top.mag,
-      cr: (sc.re * c + sc.im * s) / top.mag, // in phase with the dominant mode
-      ci: (sc.im * c - sc.re * s) / top.mag, // in quadrature (fills in nodes off resonance)
-      detuneHz: f - sc.md.f,
-    });
+    if (kept.length >= maxModes || sc.mag < keepRatio * top.mag) break;
+    kept.push(sc);
   }
-  return { active, psi };
+  let sr = 0, si = 0;
+  for (const k of kept) { sr += (k.re * k.re - k.im * k.im) / (top.mag * top.mag); si += (2 * k.re * k.im) / (top.mag * top.mag); }
+  const psi = 0.5 * Math.atan2(si, sr);
+  const cs = Math.cos(psi), sn = Math.sin(psi);
+  let inPhase = 0, total = 0;
+  const active = kept.map((sc) => {
+    const ar = (sc.re * cs + sc.im * sn) / top.mag, ai = (sc.im * cs - sc.re * sn) / top.mag;
+    inPhase += ar * ar; total += ar * ar + ai * ai;
+    const k = 1 / Math.sqrt(sc.md.norm); // back to the un-normalized shapes the field evaluates
+    return { ...sc.md, weight: sc.mag / top.mag, cr: ar * k, ci: ai * k, detuneHz: f - sc.md.f };
+  });
+  return { active, psi, sharpness: total > 0 ? inPhase / total : 1 };
 }
 
 // ---------------------------------------------------------------- field
@@ -216,7 +232,7 @@ function makeField(plate, active) {
       const md = t.md;
       let phi;
       if (plate === 'circle') phi = look(t.lut, Math.hypot(u, v)) * Math.cos(md.m * Math.atan2(v, u));
-      else if (plate === 'square') phi = squareShape(md.m, md.n, md.sign, u, v);
+      else if (plate === 'square') phi = squareShape(md.m, md.n, md.sign, u + 0.5, v + 0.5);
       else phi = look(t.lut, u / Math.PI) * Math.cos(md.m * v);
       S += md.cr * phi; Qd += md.ci * phi;
     }
@@ -279,16 +295,24 @@ export function resolveParams(input = {}) {
   const preset = PRESETS[presetKey];
   if (!PLATES[plate]) throw new Error(`Unknown plate "${plate}"`);
   if (!preset) throw new Error(`Unknown preset "${presetKey}"`);
-  const frequency = Number(input.frequency ?? 432);
-  if (!(frequency > 0) || !Number.isFinite(frequency)) throw new Error('Frequency must be a positive number of hertz');
+  const num = (v, name) => { const x = Number(v); if (!Number.isFinite(x)) throw new Error(`${name} must be a number`); return x; };
+  const fundamentalHz = num(input.fundamentalHz ?? PLATES[plate].defaultFundamental, 'Lowest-mode frequency');
+  if (fundamentalHz <= 0) throw new Error('Lowest-mode frequency must be above 0 Hz');
+  const frequency = num(input.frequency ?? 432, 'Frequency');
+  if (!(frequency > 0)) throw new Error('Frequency must be a positive number of hertz');
+  const [lo, hi] = frequencyRange(plate, fundamentalHz);
+  if (frequency < lo * (1 - 1e-9) || frequency > hi * (1 + 1e-9)) {
+    throw new Error(`${frequency} Hz is outside this plate's modelled range (${lo.toFixed(1)}–${hi.toFixed(1)} Hz). Change the lowest-mode frequency to move the range.`);
+  }
+  const driveOffset = num(input.driveOffset ?? (plate === 'square' ? 0 : 0.37), 'Drive point');
+  if (driveOffset < 0 || driveOffset > 0.95) throw new Error('Drive point must be between 0 (centre) and 0.95 (near the edge)');
+  const az = input.azimuthal ?? 'auto';
+  if (az !== 'auto' && !(Number.isInteger(az) && az >= 0)) throw new Error('Sphere meridian count must be "auto" or a whole number ≥ 0');
   return {
-    frequency, plate, presetKey, preset,
+    frequency, plate, presetKey, preset, fundamentalHz, driveOffset, azimuthal: az,
     seed: (input.seed ?? 1) >>> 0,
-    Q: clamp(Number(input.Q ?? 30), 2, 1000),
-    fundamentalHz: Number(input.fundamentalHz ?? PLATES[plate].defaultFundamental),
-    driveOffset: input.driveOffset ?? (plate === 'square' ? 0 : 0.37),
-    azimuthal: input.azimuthal ?? 'auto',
-    gravity: clamp(Number(input.gravity ?? preset.gravity), 0.05, 5),
+    Q: clamp(num(input.Q ?? 100, 'Q'), 2, 1000),
+    gravity: clamp(num(input.gravity ?? preset.gravity, 'Gravity'), 0.05, 5),
     material: input.material && MATERIALS[input.material] ? input.material : preset.material,
     inverse: !!input.inverse,
   };
@@ -547,24 +571,7 @@ function buildRoads(p, dom, field, g) {
     }
   }
 
-  // 3. gradient spokes (minor hyperstreamlines) from the nodal lines toward the antinodes
-  let spokeSpacing = null;
-  if (!pr.arcology) {
-    const base = roads.slice();
-    const seeds = base.filter((r) => r.kind === 'boulevard').map((r) => scale3(add(r.a, r.b), 0.5));
-    let dsep = pr.streetSpacing * 2.5;
-    let spokes = [];
-    for (let iter = 0; iter < 5; iter++) {
-      spokes = traceSpokes(dom, field, seeds, dsep, pr);
-      const total = base.reduce((s, r) => s + len3(sub(r.b, r.a)), 0) + spokes.reduce((s, r) => s + len3(sub(r.b, r.a)), 0);
-      spokeSpacing = dsep;
-      if (total >= targetLength) break;
-      dsep *= 0.7;
-    }
-    roads.push(...spokes);
-  }
-
-  // 4. perimeter road / wall
+  // 3. perimeter road / wall
   if (dom.kind === 'plane') {
     const pts = [];
     if (dom.shape === 'circle') {
@@ -581,6 +588,25 @@ function buildRoads(p, dom, field, g) {
     }
     for (let i = 1; i < pts.length; i++) roads.push({ a: pts[i - 1], b: pts[i], w: pr.widths.wall, kind: 'wall' });
   }
+  // 4. gradient spokes (minor hyperstreamlines) toward the antinodes, seeded on the nodal lines first,
+  //    then on the rings and the wall, so low modes with no interior nodal line still get connected streets
+  let spokeSpacing = null;
+  if (!pr.arcology) {
+    const base = roads.slice();
+    const order = { boulevard: 0, ring: 1, wall: 2 };
+    const seeds = base.slice().sort((x, y) => order[x.kind] - order[y.kind]).map((r) => scale3(add(r.a, r.b), 0.5));
+    let dsep = pr.streetSpacing * 2.5;
+    let spokes = [];
+    for (let iter = 0; iter < 5; iter++) {
+      spokes = traceSpokes(dom, field, seeds, dsep, pr);
+      const total = base.reduce((s, r) => s + len3(sub(r.b, r.a)), 0) + spokes.reduce((s, r) => s + len3(sub(r.b, r.a)), 0);
+      spokeSpacing = dsep;
+      if (total >= targetLength) break;
+      dsep *= 0.7;
+    }
+    roads.push(...spokes);
+  }
+
   return { roads, nodalSpacing, ringLevels, spokeSpacing, targetLength, wBoulevard };
 }
 
@@ -658,6 +684,89 @@ function lotCandidates(dom, spacing, rng, jitter) {
   return out;
 }
 
+// ---------------------------------------------------------------- arcology helpers
+class MinHeap {
+  constructor() { this.k = []; this.v = []; }
+  get size() { return this.k.length; }
+  push(key, val) {
+    const k = this.k, v = this.v; let i = k.length; k.push(key); v.push(val);
+    while (i > 0) { const p = (i - 1) >> 1; if (k[p] <= key) break; k[i] = k[p]; v[i] = v[p]; i = p; }
+    k[i] = key; v[i] = val;
+  }
+  pop() {
+    const k = this.k, v = this.v, top = [k[0], v[0]], lk = k.pop(), lv = v.pop();
+    if (k.length) {
+      let i = 0; const n = k.length;
+      for (;;) {
+        let c = 2 * i + 1; if (c >= n) break;
+        if (c + 1 < n && k[c + 1] < k[c]) c++;
+        if (k[c] >= lk) break;
+        k[i] = k[c]; v[i] = v[c]; i = c;
+      }
+      k[i] = lk; v[i] = lv;
+    }
+    return top;
+  }
+}
+// Neighbouring lot indices (4-neighbours on the plane grid, nearest ring on the sphere lattice).
+// `missing` marks cells at the plate edge, whose outside neighbour does not exist.
+function neighbourLists(dom, lots, L) {
+  const out = lots.map(() => []);
+  if (dom.kind === 'plane') {
+    const key = (P) => `${Math.round((P[0] + dom.extent) / L)},${Math.round((P[2] + dom.extent) / L)}`;
+    const idx = new Map(lots.map((l, i) => [key(l.P), i]));
+    lots.forEach((l, i) => {
+      const [a, b] = key(l.P).split(',').map(Number);
+      let missing = false;
+      for (const [x, z] of [[a + 1, b], [a - 1, b], [a, b + 1], [a, b - 1]]) {
+        const j = idx.get(`${x},${z}`);
+        if (j === undefined) missing = true; else out[i].push(j);
+      }
+      out[i].missing = missing;
+    });
+    return out;
+  }
+  const c = 1.5 * L, grid = new Map();
+  const k3 = (P) => `${Math.floor(P[0] / c)},${Math.floor(P[1] / c)},${Math.floor(P[2] / c)}`;
+  lots.forEach((l, i) => { const k = k3(l.P); (grid.get(k) ?? grid.set(k, []).get(k)).push(i); });
+  lots.forEach((l, i) => {
+    const [x0, y0, z0] = l.P.map((v) => Math.floor(v / c));
+    for (let x = x0 - 1; x <= x0 + 1; x++) for (let y = y0 - 1; y <= y0 + 1; y++) for (let z = z0 - 1; z <= z0 + 1; z++)
+      for (const j of grid.get(`${x},${y},${z}`) ?? []) if (j !== i && len3(sub(lots[j].P, l.P)) < c) out[i].push(j);
+    out[i].missing = false;
+  });
+  return out;
+}
+
+// Smallest distance from a footprint's outline (sampled every `step` m) to any road edge.
+function footprintClearance(hash, b, step) {
+  const right = cross(b.fwd, b.up);
+  const at = (x, z) => add(add(b.pos, scale3(b.fwd, x)), scale3(right, z));
+  let best = hash.clearance(b.pos);
+  const nx = Math.max(1, Math.ceil(b.w / step)), nz = Math.max(1, Math.ceil(b.d / step));
+  for (let i = 0; i <= nx; i++) { const x = -b.w / 2 + (b.w * i) / nx; best = Math.min(best, hash.clearance(at(x, b.d / 2)), hash.clearance(at(x, -b.d / 2))); }
+  for (let k = 1; k < nz; k++) { const z = -b.d / 2 + (b.d * k) / nz; best = Math.min(best, hash.clearance(at(b.w / 2, z)), hash.clearance(at(-b.w / 2, z))); }
+  return best;
+}
+
+// Largest height difference between a terrace cell and any neighbour (open cells and the plate edge count as 0 m).
+function maxTerraceStep(dom, buildings, L) {
+  if (!buildings.length) return 0;
+  const lots = buildings.map((b) => ({ P: b.pos }));
+  const nb = neighbourLists(dom, lots, L);
+  let worst = 0;
+  buildings.forEach((b, i) => {
+    let low = nb[i].missing ? 0 : Infinity;
+    const expected = dom.kind === 'plane' ? 4 : 0;
+    if (dom.kind === 'plane' && nb[i].length < expected) low = 0;
+    for (const j of nb[i]) low = Math.min(low, buildings[j].h);
+    if (dom.kind === 'sphere' && nb[i].length < 4) low = 0;
+    if (low === Infinity) low = 0;
+    worst = Math.max(worst, b.h - low);
+  });
+  return worst;
+}
+
 // ---------------------------------------------------------------- city
 export function generateCity(input = {}) {
   const t0 = Date.now();
@@ -696,6 +805,7 @@ export function generateCity(input = {}) {
   const zoneOf = (amp) => (amp >= 0.72 ? 'core' : amp >= 0.42 ? 'mixed' : amp >= 0.12 ? 'residential' : 'green');
 
   const buildings = [], trees = [];
+  let terraceRise = null;
   let greenLots = 0, roadLots = 0, accessLots = 0;
   const binding = { material: 0, slenderness: 0, core: 0 };
 
@@ -719,21 +829,44 @@ export function generateCity(input = {}) {
     const step = pr.terraceFloors * pr.floorH;
     const lots = lotCandidates(dom, pr.lot, rng, 0);
     const foot = dom.kind === 'plane' ? pr.lot * 0.97 : pr.lot * 0.58;
+    const hTop = Math.max(step, Math.floor(H / step) * step);
+    const cellOf = []; // building index per candidate, −1 when the cell stays open (canyon, plaza, edge)
     for (const { P, u, v } of lots) {
       const { S, A } = field.at(u, v);
       const amp = p.inverse ? 1 - A : A;
       const c = hash.clearance(P);
-      if (c < (dom.kind === 'plane' ? foot * 0.71 : foot * 0.71) + 1) { roadLots++; continue; }
-      if (amp < 0.06) { greenLots++; trees.push({ pos: P, up: upAt(dom, P), s: 1 + rng() }); continue; }
-      const hTop = Math.max(step, Math.floor(H / step) * step);
-      let h = clamp(Math.round((pr.designHeight * Math.pow(amp, 1.15)) / step) * step, step, hTop);
-      if (h === hTop && pr.designHeight * Math.pow(amp, 1.15) > hTop + step / 2 && H === hMat) binding.material++;
+      if (c < foot * 0.71 + 1) { roadLots++; cellOf.push(-1); continue; }
+      if (amp < 0.06) { greenLots++; trees.push({ pos: P, up: upAt(dom, P), s: 1 + rng() }); cellOf.push(-1); continue; }
+      const want = pr.designHeight * Math.pow(amp * (0.94 + 0.12 * rng()), 1.15);
+      const h = clamp(Math.round(want / step) * step, step, hTop);
+      if (h === hTop && want > hTop + step / 2 && H === hMat) binding.material++;
       const { up, fwd } = frame(P, u, v);
+      cellOf.push(buildings.length);
       buildings.push({
         pos: P, up, fwd, w: foot, d: foot, h, floors: Math.round(h / pr.floorH), zone: zoneOf(amp),
         shape: 'terrace', polarity: S >= 0 ? 1 : -1, amp, district: districtAt(u, v), landmark: false,
       });
     }
+    // Terracing: no cell may rise more than `rise` above any neighbour (an open cell counts as 0 m),
+    // so every exposed face keeps the slenderness of a real tower. Dijkstra from the low cells.
+    terraceRise = Math.max(step, Math.floor((slendernessLimit(8, p.gravity) * foot) / step) * step);
+    const nbrs = neighbourLists(dom, lots, pr.lot);
+    // open cells are 0 m; cells on the plate edge have an open neighbour outside the plate
+    const hv = cellOf.map((bi, i) => (bi < 0 ? 0 : nbrs[i].missing ? Math.min(buildings[bi].h, terraceRise) : buildings[bi].h));
+    const done = new Uint8Array(hv.length), heap = new MinHeap();
+    hv.forEach((h, i) => heap.push(h, i));
+    while (heap.size) {
+      const [h, i] = heap.pop();
+      if (done[i] || h !== hv[i]) continue;
+      done[i] = 1;
+      for (const j of nbrs[i]) if (!done[j] && hv[j] > h + terraceRise) { hv[j] = h + terraceRise; heap.push(hv[j], j); }
+    }
+    cellOf.forEach((bi, i) => {
+      if (bi < 0) return;
+      const b = buildings[bi], h = Math.max(step, hv[i]);
+      if (h < b.h) binding.slenderness++;
+      b.h = h; b.floors = Math.round(h / pr.floorH);
+    });
   } else {
     // Does a w×d footprint centred at P (long side along fwd) keep `setback` from every road edge?
     // Boundary samples ≤ 4 m apart catch any road (narrowest half-width 3.5 m) that crosses the outline.
@@ -831,6 +964,8 @@ export function generateCity(input = {}) {
     }
     for (const b of best.values()) { b.landmark = true; b.floors = Math.round(b.floors * 1.3); }
 
+    // a wider footprint must stay inside the lot's no-overlap radius and clear every road
+    const canWiden = (b, W, D) => Math.hypot(W, D) / 2 <= b.hdCell + 1e-9 && fits(b.pos, b.up, b.fwd, W, D);
     // structural limits: widen toward the slenderness rule where the lot allows, else cap the height
     for (const b of buildings) {
       let h = b.floors * pr.floorH;
@@ -839,14 +974,14 @@ export function generateCity(input = {}) {
         const need = h / slender;
         // widest square (or the current long side) that still fits the lot and clears the roads
         let side = Math.min(need, b.hdCell / Math.SQRT2);
-        while (side > Math.min(b.w, b.d) && !fits(b.pos, b.up, b.fwd, Math.max(b.w, side), Math.max(b.d, side))) side *= 0.93;
+        while (side > Math.min(b.w, b.d) && !canWiden(b, Math.max(b.w, side), Math.max(b.d, side))) side *= 0.93;
         if (side > Math.min(b.w, b.d)) { b.w = Math.max(b.w, side); b.d = Math.max(b.d, side); }
         if (h > slender * Math.min(b.w, b.d)) { h = slender * Math.min(b.w, b.d); binding.slenderness++; }
       }
       // a building over six floors needs a lift-and-stair core plus usable floor around it
       if (h > CORE_FLOORS * pr.floorH && Math.min(b.w, b.d) < MIN_CORE_SIDE) {
         let side = MIN_CORE_SIDE;
-        const ok = side / Math.SQRT2 <= b.hdCell && fits(b.pos, b.up, b.fwd, Math.max(b.w, side), Math.max(b.d, side));
+        const ok = canWiden(b, Math.max(b.w, side), Math.max(b.d, side));
         if (ok) { b.w = Math.max(b.w, side); b.d = Math.max(b.d, side); }
         else { h = Math.min(h, CORE_FLOORS * pr.floorH); binding.core++; }
       }
@@ -898,6 +1033,14 @@ export function generateCity(input = {}) {
     heightLimit: hMat,
     slendernessLimit: slender,
     binding,
+    // measured, not assumed
+    maxSlenderness: buildings.reduce((m, b) => (b.shape === 'dome' || b.shape === 'terrace' ? m : Math.max(m, b.h / Math.min(b.w, b.d))), 0),
+    maxStreetDistance: pr.arcology ? null : buildings.reduce((m, b) => Math.max(m, reach.clearance(b.pos)), 0),
+    minRoadClearance: buildings.reduce((m, b) => Math.min(m, footprintClearance(hash, b, 2)), Infinity),
+    terraceRise,
+    maxTerraceStep: pr.arcology ? maxTerraceStep(dom, buildings, pr.lot) : null,
+    accessLimit: pr.arcology ? null : access,
+    patternSharpness: resp.sharpness,
   };
   const checks = plausibilityChecks(p, stats);
   const dominant = resp.active[0];
@@ -912,6 +1055,7 @@ export function generateCity(input = {}) {
       dominant: modeLabel(dominant), symmetry: symmetryNote(dominant),
       world: { shape: dom.shape, extent: dom.extent, area: dom.area, Rs: dom.Rs ?? null },
       ringLevels: rd.ringLevels, spokeSpacing: rd.spokeSpacing, boulevardWidth: rd.wBoulevard,
+      azimuthal: p.azimuthal, sharpness: resp.sharpness,
     },
     roads: rd.roads,
     buildings,
@@ -936,8 +1080,10 @@ function plausibilityChecks(p, s) {
   const out = [];
   const add = (id, label, value, status, basis) => out.push({ id, label, value, status, basis });
   if (urban) {
+    const town = p.presetKey === 'town';
     add('street-share', 'Land given to streets', pct(s.roadShare),
-      s.roadShare >= 0.25 && s.roadShare <= 0.4 ? 'pass' : 'warn', 'UN-Habitat: 30–35 % of urban land');
+      town ? 'info' : s.roadShare >= 0.25 && s.roadShare <= 0.4 ? 'pass' : 'warn',
+      town ? 'UN-Habitat targets 30–35 % for cities; small towns usually run lower' : 'UN-Habitat: 30–35 % of urban land');
     add('street-density', 'Street density', `${s.streetDensity.toFixed(1)} km/km²`,
       s.streetDensity >= 18 ? 'pass' : 'warn', 'UN-Habitat: at least 18 km of street per km²');
     add('open-space', 'Parks and open space', pct(s.greenShare),
@@ -950,10 +1096,18 @@ function plausibilityChecks(p, s) {
   add('self-weight', 'Tallest structure vs. material limit', `${s.maxHeight.toFixed(0)} m of ${s.heightLimit.toFixed(0)} m`,
     s.maxHeight <= s.heightLimit + 1e-6 ? 'pass' : 'fail', `σ/(ρ·g·${SAFETY_FACTOR}) for the chosen material and gravity`);
   if (urban) {
-    add('slenderness', 'Tower slenderness', `≤ 1:${s.slendernessLimit.toFixed(1)}`, 'pass',
-      'Slender above 1:10–1:12; record about 1:24 (111 W 57th St)');
+    add('slenderness', 'Most slender building', `1:${s.maxSlenderness.toFixed(1)} (limit 1:${s.slendernessLimit.toFixed(1)})`,
+      s.maxSlenderness <= s.slendernessLimit + 1e-6 ? 'pass' : 'fail', 'Slender above 1:10–1:12; record about 1:24 (111 W 57th St)');
+    add('access', 'Farthest building from a street', `${s.maxStreetDistance.toFixed(0)} m (limit ${s.accessLimit.toFixed(0)} m)`,
+      s.maxStreetDistance <= s.accessLimit + 1e-6 ? 'pass' : 'fail', 'Lots beyond walking reach become green space');
+  } else {
+    add('terrace', 'Largest terrace step', `${s.maxTerraceStep.toFixed(0)} m (limit ${s.terraceRise.toFixed(0)} m)`,
+      s.maxTerraceStep <= s.terraceRise + 1e-6 ? 'pass' : 'fail', 'Each exposed face kept within 1:8 slenderness; open canyons count as 0 m');
   }
-  add('access', 'Buildings clear of roads, within reach of a street', 'enforced', 'pass', 'Setback from every road edge; lots beyond walking reach become green');
+  add('setback', 'Closest building to a road edge', `${s.minRoadClearance.toFixed(1)} m`,
+    s.minRoadClearance >= 0 ? 'pass' : 'fail', 'Footprints clear every road; overlap between lots is ruled out by lot spacing');
+  add('sharpness', 'Pattern sharpness', `${(s.patternSharpness * 100).toFixed(0)}%`,
+    s.patternSharpness >= 0.8 ? 'pass' : 'warn', 'Share of plate motion in the standing pattern; between modes the nodal lines blur');
   return out;
 }
 
@@ -1000,10 +1154,10 @@ export function buildingMesh(b) {
   const faces = [];
   for (let i = 0; i < sides; i++) {
     const j = (i + 1) % sides;
-    faces.push([i, j, sides + j, sides + i]);
+    faces.push([sides + i, sides + j, j, i]);
   }
-  faces.push([...Array(sides).keys()].reverse());
-  faces.push([...Array(sides).keys()].map((i) => sides + i));
+  faces.push([...Array(sides).keys()]);                          // floor, facing down
+  faces.push([...Array(sides).keys()].map((i) => sides + i).reverse()); // roof, facing up
   return { verts, faces };
 }
 

@@ -8,5 +8,8 @@ const out = viewer
   .replace('@@ENGINE_TEXT@@', () => engine)
   .replace('/*@@ENGINE@@*/', () => stripped);
 mkdirSync(new URL('./dist/', import.meta.url), { recursive: true });
+// artifact page (the host adds doctype, charset and viewport) and a standalone copy that opens anywhere
 writeFileSync(new URL('./dist/cymatic-city.html', import.meta.url), out);
-console.log(`dist/cymatic-city.html ${(out.length / 1024).toFixed(1)} KB`);
+const standalone = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"></head><body style="margin:0">${out}</body></html>`;
+writeFileSync(new URL('./dist/cymatic-city-standalone.html', import.meta.url), standalone);
+console.log(`dist/cymatic-city.html ${(out.length / 1024).toFixed(1)} KB (+ standalone copy)`);

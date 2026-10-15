@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   besselJ, besselZeros, legendreNormalized, realSphericalHarmonic,
-  enumerateModes, drivenResponse, mulberry32,
+  enumerateModes, drivenResponse, mulberry32, drivePoint,
 } from '../src/cymatic-engine.js';
 
 const close = (a, b, tol, msg) => assert.ok(Math.abs(a - b) <= tol, `${msg ?? ''} got ${a}, expected ${b} (±${tol})`);
@@ -82,4 +82,49 @@ test('circle: a drive point on a mode\'s nodal circle does not couple to it', ()
 test('seeded RNG is deterministic', () => {
   const a = mulberry32(42), b = mulberry32(42);
   for (let i = 0; i < 100; i++) assert.equal(a(), b());
+});
+
+test('mode norms ∫φ² dA match numerical integration', () => {
+  const circle = enumerateModes({ plate: 'circle' }).find((m) => m.m === 3 && m.n === 2);
+  let I = 0; const N = 600;
+  for (let i = 0; i < N; i++) {
+    const r = (i + 0.5) / N;
+    I += besselJ(3, circle.j * r) ** 2 * r / N;
+  }
+  close(I * Math.PI, circle.norm, 1e-5, 'circle (3,2)');
+  const sq = enumerateModes({ plate: 'square' });
+  for (const [m, n, sign] of [[1, 2, 1], [0, 3, -1], [2, 2, 1]]) {
+    const md = sq.find((x) => x.m === m && x.n === n && x.sign === sign);
+    let J = 0; const K = 200;
+    for (let i = 0; i < K; i++) for (let k = 0; k < K; k++) {
+      const x = (i + 0.5) / K, y = (k + 0.5) / K;
+      const phi = Math.cos(n * Math.PI * x) * Math.cos(m * Math.PI * y) + sign * Math.cos(m * Math.PI * x) * Math.cos(n * Math.PI * y);
+      J += phi * phi / (K * K);
+    }
+    close(J, md.norm, 1e-3, `square (${m},${n},${sign})`);
+  }
+});
+
+test('square plate uses corner coordinates: (0,1)+ has its node on the anti-diagonal and at the centre', () => {
+  const md = enumerateModes({ plate: 'square', driveOffset: 0 }).find((m) => m.m === 0 && m.n === 1 && m.sign === 1);
+  close(md.coupling, 0, 1e-12, 'centre is on the node');
+  const off = enumerateModes({ plate: 'square', driveOffset: 0.3 }).find((m) => m.m === 0 && m.n === 1 && m.sign === 1);
+  const { x, y } = drivePoint('square', 0.3);
+  close(off.coupling, Math.cos(Math.PI * x) + Math.cos(Math.PI * y), 1e-12);
+});
+
+test('sphere coupling follows the drive point', () => {
+  const a = enumerateModes({ plate: 'sphere', driveOffset: 0.1 }), b = enumerateModes({ plate: 'sphere', driveOffset: 0.9 });
+  const l6a = a.find((m) => m.l === 6), l6b = b.find((m) => m.l === 6);
+  const tA = drivePoint('sphere', 0.1).theta;
+  close(l6a.coupling, realSphericalHarmonic(6, l6a.m, tA, 0), 1e-12);
+  assert.notEqual(l6a.coupling.toFixed(6), l6b.coupling.toFixed(6));
+});
+
+test('higher Q sharpens the pattern; low Q spreads the response over more modes', () => {
+  const modes = enumerateModes({ plate: 'circle' });
+  const lo = drivenResponse(modes, 432, 5), hi = drivenResponse(modes, 432, 500);
+  assert.ok(hi.sharpness > lo.sharpness, `${hi.sharpness} vs ${lo.sharpness}`);
+  const onMode = drivenResponse(modes, modes.find((m) => m.m === 4 && m.n === 3).f, 500);
+  assert.ok(onMode.sharpness > 0.99);
 });

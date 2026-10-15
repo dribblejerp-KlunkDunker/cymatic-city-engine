@@ -119,6 +119,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .pill.pass { background: color-mix(in srgb, var(--ok) 22%, transparent); color: var(--ok); }
 .pill.warn { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
 .pill.fail { background: color-mix(in srgb, var(--bad) 22%, transparent); color: var(--bad); }
+.pill.info { background: color-mix(in srgb, var(--ink-dim) 18%, transparent); color: var(--ink-dim); }
 .checks .val { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .checks .basis { grid-column: 2 / -1; color: var(--ink-dim); }
 
@@ -270,11 +271,11 @@ import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/exampl
 
 // ------------------------------------------------------------ state
 const $ = (id) => document.getElementById(id);
-const DEFAULTS = { frequency: 432, plate: "circle", preset: "city", seed: 1, Q: 30, inverse: false,
+const DEFAULTS = { frequency: 432, plate: "circle", preset: "city", seed: 1, Q: 100, inverse: false,
   gravity: null, material: null, fundamentalHz: null, driveOffset: null, azimuthal: null };
 let params = { ...DEFAULTS };
-try { const s = JSON.parse(localStorage.getItem("cymatic-city-params") || "null"); if (s) params = { ...DEFAULTS, ...s }; } catch {}
-const remember = () => { try { localStorage.setItem("cymatic-city-params", JSON.stringify(params)); } catch {} };
+try { const s = JSON.parse(localStorage.getItem("cymatic-city-params-v2") || "null"); if (s) params = { ...DEFAULTS, ...s }; } catch {}
+const remember = () => { try { localStorage.setItem("cymatic-city-params-v2", JSON.stringify(params)); } catch {} };
 
 const engineParams = () => {
   const o = { frequency: params.frequency, plate: params.plate, preset: params.preset, seed: params.seed, Q: params.Q, inverse: params.inverse };
@@ -379,15 +380,22 @@ const unitTree = new THREE.ConeGeometry(0.5, 1, 5).translate(0, 0.5, 0);
 const GEOM = { block: unitBox, tower: unitBox, terrace: unitBox, house: unitBox, pod: unitCyl, dome: unitDome, spire: unitCone };
 
 function disposeWorld() {
-  world.traverse((o) => { if (o.isMesh) { if (o.geometry && !Object.values(GEOM).includes(o.geometry) && ![unitRoof, unitTree].includes(o.geometry)) o.geometry.dispose(); o.material.dispose(); } });
+  world.traverse((o) => {
+    if (!o.isMesh) return;
+    if (o.geometry && !Object.values(GEOM).includes(o.geometry) && ![unitRoof, unitTree, unitCone].includes(o.geometry)) o.geometry.dispose();
+    o.material.dispose();
+    if (o.isInstancedMesh) o.dispose(); // frees the instance matrix and colour buffers on the GPU
+  });
   scene.remove(world); world = new THREE.Group(); scene.add(world); pickTargets = [];
 }
 
 function show(L) {
   layout = L;
   $("busy").hidden = true; $("pick").hidden = true;
-  const ep = engineParams();
-  const F = fieldPreview(ep);
+  // paint the plate from the settings this city was built with, not whatever the sliders say now
+  const m0 = L.meta;
+  const F = fieldPreview({ frequency: m0.frequency, plate: m0.plate, preset: m0.preset, Q: m0.Q, fundamentalHz: m0.fundamentalHz,
+    driveOffset: m0.driveOffset, azimuthal: m0.azimuthal, gravity: m0.gravity, material: m0.material });
   disposeWorld();
   const style = PRESETS[L.meta.preset].style;
   const pal = PALETTES[style];
@@ -544,7 +552,10 @@ function updatePanel(L) {
   $("hud-mode").textContent = `${m.note} · dominant mode ${m.dominant}`;
   $("figure-caption").innerHTML = "";
   const strong = document.createElement("strong"); strong.textContent = `Sand figure at ${fmtHz(m.frequency)} Hz`;
-  $("figure-caption").append(strong, document.createTextNode("Where sand gathers, the plate stands still. Those nodal lines become the boulevards."));
+  const sharp = Math.round(m.sharpness * 100);
+  $("figure-caption").append(strong, document.createTextNode(sharp >= 80
+    ? `Sand gathers where the plate stands still. Those nodal lines become the boulevards (pattern ${sharp}% sharp).`
+    : `Between two modes the plate never fully stands still, so the sand lines blur (pattern ${sharp}% sharp). Boulevards follow the dominant standing pattern; raise Q or nudge the frequency for crisp lines.`));
 
   const modes = $("modes"); modes.replaceChildren();
   for (const md of m.modes) {
@@ -618,7 +629,7 @@ $("preset-seg").addEventListener("click", (e) => { const v = e.target.closest("b
 $("plate-seg").addEventListener("click", (e) => { const v = e.target.closest("button")?.dataset.v; if (v && v !== params.plate) { params.plate = v; params.fundamentalHz = null; params.driveOffset = null; params.azimuthal = null; regenerate(0); } });
 $("seed").addEventListener("change", (e) => { params.seed = Math.max(0, parseInt(e.target.value, 10) || 0); regenerate(0); });
 $("reroll").addEventListener("click", () => { params.seed = Math.floor(Math.random() * 1e6); regenerate(0); });
-$("q").addEventListener("change", (e) => { params.Q = numOrNull(e.target, 2, 1000) ?? 30; regenerate(0); });
+$("q").addEventListener("change", (e) => { params.Q = numOrNull(e.target, 2, 1000) ?? 100; regenerate(0); });
 $("inverse").addEventListener("change", (e) => { params.inverse = e.target.checked; regenerate(0); });
 $("gravity").addEventListener("change", (e) => { params.gravity = numOrNull(e.target, 0.05, 5); regenerate(0); });
 $("material").addEventListener("change", (e) => { params.material = e.target.value || null; regenerate(0); });
