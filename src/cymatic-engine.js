@@ -1128,11 +1128,15 @@ export function toOBJ(layout) {
     emit(verts, faces, `building_${idx}_${b.zone}${b.landmark ? '_landmark' : ''}`);
   });
   layout.roads.forEach((r, idx) => {
-    const up = len3(r.a) > 1 && layout.meta.plate === 'sphere' ? norm3(add(r.a, r.b)) : [0, 1, 0];
+    const up = layout.meta.plate === 'sphere' ? norm3(add(r.a, r.b)) : [0, 1, 0];
     const dir = norm3(sub(r.b, r.a)), side = scale3(norm3(cross(up, dir)), r.w / 2), lift = scale3(up, 0.05);
     const verts = [add(add(r.a, side), lift), add(sub(r.a, side), lift), add(sub(r.b, side), lift), add(add(r.b, side), lift)];
     emit(verts, [[0, 1, 2, 3]], `road_${idx}_${r.kind}`);
   });
+  if (layout.infra && typeof layout.infraToOBJ === 'function') {
+    const extra = layout.infraToOBJ(layout, vi);
+    if (extra.text) lines.push(extra.text);
+  }
   return lines.join('\n') + '\n';
 }
 
@@ -1163,8 +1167,12 @@ export function buildingMesh(b) {
 
 // Plain-data copy of a layout (drops the field functions).
 export function toJSON(layout) {
-  const { field, timingMs, ...rest } = layout;
-  void field; void timingMs;
+  const { field, timingMs, infraToOBJ, infraMs, ...rest } = layout;
+  void field; void timingMs; void infraToOBJ; void infraMs;
+  if (rest.infra) {
+    const { graph, ...infra } = rest.infra;
+    rest.infra = { ...infra, graph: { nodes: graph.nodes, edges: graph.edges, connectors: graph.connectors } };
+  }
   return JSON.stringify(rest);
 }
 
