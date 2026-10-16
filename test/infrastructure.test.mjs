@@ -253,3 +253,15 @@ test('infrastructure also serves custom and fantasy-mode cities', () => {
   assert.equal(L.infra.laterals.length, L.buildings.length);
   for (const c of L.infra.checks) assert.notEqual(c.status, 'fail', `${c.id}: ${c.value}`);
 });
+
+test('transmission is meshed: no single line strands more than 20 % of people when there are several substations', () => {
+  for (const plate of PLATES) for (const preset of ['city', 'alien']) {
+    const L = full({ plate, preset, frequency: 432 });
+    const P = L.infra.power;
+    assert.ok(P.lines.length >= P.substations.length, 'every substation has a line');
+    if (P.substations.length >= 3) assert.ok(P.n1Transmission <= 0.2 + 1e-9, `${plate}/${preset}: worst line strands ${(100 * P.n1Transmission).toFixed(0)} %`);
+    for (const l of P.lines) assert.ok(l.edges.length > 0 && l.length > 0);
+    // every transmission edge belongs to at least one line, and lines are made of street edges
+    for (const t of P.transmission) assert.ok(t.lines.length >= 1 && L.infra.graph.edges[t.edge]);
+  }
+});
