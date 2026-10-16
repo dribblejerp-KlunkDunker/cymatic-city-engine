@@ -6,15 +6,19 @@ The Cymatic City Engine turns a drive frequency into a complete 3D settlement �
 
 It runs as a single self-contained web page (`dist/cymatic-city.html`) or as a dependency-free ES module you can call from your own engine.
 
+![A city at 432 Hz on a circular membrane: nodal boulevards, ring roads, districts and landmarks](docs/screenshots/01-city-surface.webp)
+
 ---
 
 ## Contents
 
 - [What it does](#what-it-does)
+- [Gallery](#gallery)
 - [Quick start](#quick-start)
 - [Using the viewer](#using-the-viewer)
 - [How a frequency becomes a city](#how-a-frequency-becomes-a-city)
 - [The underground](#the-underground)
+- [Terrain and water](#terrain-and-water)
 - [Simulation: time, flow, failure](#simulation-time-flow-failure)
 - [Realism and fantasy](#realism-and-fantasy)
 - [Profiles](#profiles)
@@ -36,12 +40,30 @@ It runs as a single self-contained web page (`dist/cymatic-city.html`) or as a d
 | **Plan** | Nodal lines become boulevards; amplitude contours become ring roads; gradient streets climb from each nodal line to the crest of its lobe; a perimeter road closes the plate. Streets are added until the plan reaches UN-Habitat's 18 km of street per km². |
 | **Buildings** | Amplitude sets zoning (core / mixed / residential / green) and height; the wave's sign splits alternating districts; the peak of each district gets a landmark. Every footprint clears every road edge, never overlaps a neighbour, and sits within walking reach of a street. |
 | **Structure** | Height ≤ σ/(ρ·g·3) for the chosen material; slenderness ≤ 1:10 (city) scaled by g^-1/3; buildings over six floors need a 14 m lift core; arcologies are terraced so no exposed face exceeds 1:8; spherical arcologies stay a shell. |
+| **Terrain** | Flat by default. *Relief* lets the standing wave be the ground (antinodes rise, troughs sink and flood into lakes crossed by bridges); *valleys* make every lobe a hill with the sand lines as valleys, optionally flooded into canals; or import a heightmap from another engine. Automatic relief keeps the ground under a 9 % grade; sewers follow true inverts, tanks climb to the high ground, pressure zones split and valves cap the basins. |
 | **Underground** | Street graph with junctions at every crossing; a service lateral per building; gravity sewers sized by Manning and laid at Ten-State minimum slopes with lift stations and force mains; looped water mains fed from elevated tanks and a treatment plant; a power station, substations, 11 kV feeders and 110 kV transmission; metro stations at district landmarks with tunnels bored below every foundation; utility galleries under arcology boulevards. |
 | **Simulation** | A time axis: the city is founded at the strongest antinode near the drive point and grows outward along its streets on an exponential built-up curve; buildings age on Weibull lifetimes and are rebuilt denser within the same structural limits; every keyframe is a complete city with its networks rebuilt. An hourly flow model: Hazen-Williams pressure along the water mains, three-phase voltage drop along the feeders, Manning partial-flow depth in the sewers, a gravity-model commute on the metro. Failure analysis: fail any asset and see who loses service; N-1 resilience per network. |
 | **Checks** | Street share, street density, open space, residents/ha, tallest vs. material limit, most slender building, walking reach, road clearance, terrace steps, pattern sharpness, sewer slope and depth, water velocity and pressure, substation loading, tunnel clearance. |
 | **Viewer** | Surface / X-ray / Underground views, layer chips, pipe exaggeration, section cut, orbit + WASD/QE fly, full zoom, click-to-inspect anything with a Focus action, themes, custom settlements, profiles, PNG and zip export (OBJ + JSON + profile). |
 
 Same inputs and seed produce byte-identical output. The seed changes buildings, never streets.
+
+## Gallery
+
+Captured headless from the page in this repository (`docs/screenshots/`).
+
+| | |
+|---|---|
+| ![City on a circular membrane](docs/screenshots/01-city-surface.webp) **City, circular membrane, 432 Hz.** Boulevards on the nodal lines, rings on the amplitude contours, tallest buildings at the antinodes. | ![Square Chladni plate](docs/screenshots/02-square-plate.webp) **Square Chladni plate.** The cos–cos pattern of a clamped square plate becomes the street grid. |
+| ![Alien city on a sphere](docs/screenshots/03-sphere-alien.webp) **Alien city on a sphere.** Spherical harmonics, low gravity, speculative material: the checks report what Earth rules would allow. | ![Megastructure](docs/screenshots/04-megastructure.webp) **Megastructure.** One terraced arcology; no exposed face steeper than 1:8, the whole structure under the material's self-weight limit. |
+| ![Town, close](docs/screenshots/05-town-close.webp) **Town.** Pitched roofs, greens where the plate barely moves, the landmark at the district's crest. | ![Underground](docs/screenshots/06-underground.webp) **Underground view.** Sewers, water mains, feeders, transmission and metro tunnels under the ghosted city. |
+| ![Underground, close](docs/screenshots/07-underground-close.webp) **Under one street.** Pipes at their real depths and diameters (exaggeration optional); click anything to inspect it. | ![Section cut](docs/screenshots/08-section-cut.webp) **Section cut.** A clipping plane through the model shows foundations above the tunnels. |
+| ![Flows at 19:00](docs/screenshots/09-flows-evening.webp) **Evening peak.** Networks coloured by load at 19:00: pressure, voltage, sewer fullness, metro crowding. | ![Failure impact](docs/screenshots/10-failure-impact.webp) **Fail a tank.** The buildings that lose or degrade service turn red; the panel counts people and jobs. |
+| ![Year 40](docs/screenshots/11-timeline-year-40.webp) **Year 40 of 120.** The city founded at the strongest antinode near the drive point, growing outward along its streets. | ![Year 80](docs/screenshots/12-timeline-year-80.webp) **Year 80.** Networks rebuilt for the city of that year; lift stations and substations added as it grows. |
+| ![Relief terrain](docs/screenshots/16-terrain-relief.webp) **Relief.** The wave is the ground: lobes rise, troughs flood, streets bridge the lakes. | ![Bridges](docs/screenshots/17-terrain-bridges.webp) **Bridges and embankments.** Decks one freeboard above the water on piers; shore streets embanked to the same level. |
+| ![Sewers on terrain](docs/screenshots/18-terrain-sewers-underground.webp) **Sewers on the heightfield.** Inverts fall with the ground; plants sit on the lowest perimeter; valves cap pressure in the basins. | ![Canals](docs/screenshots/19-terrain-canals.webp) **Valleys with canals.** Every lobe a hill, the sand lines flooded: a town of islands and causeways. |
+| ![Fantasy theme](docs/screenshots/13-fantasy-theme.webp) **High-fantasy theme.** A custom settlement in living wood with realism off: the engine builds what the pattern asks for and the checks say what would stand. | ![Hive theme, X-ray](docs/screenshots/14-hive-xray.webp) **Alien hive, X-ray.** Same engineering, different names and colours. |
+| ![Sphere relief](docs/screenshots/20-terrain-sphere.webp) **Relief on a sphere.** Radial terrain, with seas in the troughs. | ![Phone layout](docs/screenshots/15-phone.webp) **Phone.** The panel becomes a sheet; everything still works at 390 px. |
 
 ## Quick start
 
@@ -100,6 +122,20 @@ Everything below runs on a street graph built from the road segments, with junct
 
 Lower gravity steepens the sewers (more lift stations), raises the tanks and relaxes slenderness; heavier gravity does the reverse.
 
+## Terrain and water
+
+`terrain` is `'flat'` (default), `'relief'`, `'valleys'`, or an object `{ mode, relief, waterLevel, canals, heightmap }`.
+
+- **Relief.** The ground is `R · S(u, v)`: the signed standing wave scaled to a relief `R`. Antinodes of one sign rise into hills, the other sign sinks into basins; the default water level is `−0.5 R`, so the deepest basins become lakes.
+- **Valleys.** The ground is `R · (2A − 1)`: every lobe is a hill and the nodal lines are the valleys between them. With `canals: true` the lowest 8 % of the plate by amplitude floods, so the boulevards run as causeways through a network of channels.
+- **Heightmap.** `{ width, height, data }` with row-major values in 0..1 (the page loads a grey PNG, white high) stands in for a terrain from another engine; on a sphere the grid wraps in longitude.
+- **Automatic relief** is 4 % of the nodal spacing, then held down so the ground itself never exceeds a 9 % slope (local streets are limited to 10 %); an explicit `relief` in metres is taken as given and the **steepest street** check says what it costs. The **freeboard** is `clamp(0.15 R, 0.5, 3)` m: shore streets within it are embanked to that level, bridge decks sit at it, and no building stands below it.
+- **Streets** take one elevation per plan point (the ground or the embankment), so streets meeting at a point agree on its height; a segment that dips under water anywhere along it is a **bridge**, drawn on piers. Buildings stand on the ground; an arcology spans its basins and its terraces are cut from the ground under each cell, including the open ground beyond the grid's edge.
+- **Underground.** Street-graph nodes carry elevations. Sewers run on true inverts (ground minus depth) and must fall at least the self-cleansing slope between manholes; routing is weighted against climbing, treatment plants sit on the lowest 30 % of the perimeter, and climbs that would push a run past 8 m deep get lift stations or force mains. Water tanks climb to the highest customer of the zone they serve and are built only as tall as that zone needs (taller than the design height means pumped); a zone splits when any customer's static head falls under 20 m (196 kPa), and a **pressure-reducing valve** resets the grade line wherever a run has dropped more than 56 m (552 kPa) below its tank, set as high as the limit allows so the run below it stays served. Trunk mains past the largest pipe run as parallel barrels. The flow model uses the same elevations and valve set points. Metro tunnels keep their depth below the ground.
+- **Reported:** `stats.terrain { mode, relief, waterLevel, shore, waterShare, bridges, bridgeLength, waterLots, maxGrade }`, `meta.terrain`, the checks `street-grade`, `water`, `pressure-zones`, `sewer-gravity`, and per-asset `elevation`, `elev`, `bridge`, `outletHeadM`.
+
+Flat terrain reproduces the 1.1 layouts byte for byte.
+
 ## Simulation: time, flow, failure
 
 **Time.** `simulate(layout, { years, keyframes })` founds the city at the building with the strongest amplitude nearest the drive point and orders settlement by street distance from it, pulled earlier by amplitude. Build years follow built-up growth of 3.7 % a year (the Lincoln Institute figure for fast-growing cities), so the first keyframes are a small town and the last half of the horizon adds most of the city. Each building then ages on a Weibull lifetime by type (shape 1.5; 70–120 year scales for Western stock) and is rebuilt; rebuilds grow toward and beyond the design height where the plate moves most, but never past the material, slenderness or lift-core limits when realism is on. Streets switch on along each new building's path back to the nucleus. Every keyframe is a full layout with its own networks, stats and checks, so anything that reads a layout reads a year of history. The simulated end state is denser than the generated plan; the viewer's **plan** button returns to it.
@@ -140,8 +176,9 @@ A profile is the complete recipe for a city: every engine parameter plus the the
 
 | Export | Purpose |
 |---|---|
-| `generateCity(input)` | Build a layout. `input`: `frequency`, `plate` (`circle` \| `square` \| `sphere`), `preset` (`town` \| `city` \| `megastructure` \| `alien` \| `custom` \| a custom spec object), `custom`, `seed`, `Q`, `gravity`, `material` (key or `{label, sigma, rho}`), `fundamentalHz`, `driveOffset` (0–0.95), `azimuthal` (sphere), `inverse`, `enforce`. Throws clear errors for bad input. |
-| `fieldPreview(input)` | The standing-wave field alone (`at(u, v) → {S, A}`, coordinate helpers) for painting the plate. |
+| `generateCity(input)` | Build a layout. `input`: `frequency`, `plate` (`circle` \| `square` \| `sphere`), `preset` (`town` \| `city` \| `megastructure` \| `alien` \| `custom` \| a custom spec object), `custom`, `seed`, `Q`, `gravity`, `material` (key or `{label, sigma, rho}`), `fundamentalHz`, `driveOffset` (0–0.95), `azimuthal` (sphere), `inverse`, `enforce`, `terrain` (`'flat'` \| `'relief'` \| `'valleys'` \| `{ mode, relief, waterLevel, canals, heightmap }`). Throws clear errors for bad input. |
+| `fieldPreview(input)` | The standing-wave field alone (`at(u, v) → {S, A}`, coordinate helpers) and its `terrain` (`z(u, v)`, `lift(P)`, `waterAt(u, v)`, `relief`, `waterLevel`, `shore`) for painting the plate. |
+| `resolveTerrain`, `makeTerrain`, `autoRelief`, `maxFieldSlope`, `canalAmplitude`, `TERRAIN_MODES`, `MAX_AUTO_GRADE` | The terrain layer. |
 | `enumerateModes`, `drivenResponse`, `frequencyRange`, `drivePoint`, `modeLabel` | The physics layer. |
 | `besselJ`, `besselZeros`, `legendreNormalized`, `realSphericalHarmonic` | Special functions (cross-checked against scipy). |
 | `PRESETS`, `PLATES`, `MATERIALS`, `CUSTOM_FIELDS`, `customPreset`, `resolveMaterial`, `heightLimit`, `slendernessLimit`, `SAFETY_FACTOR`, `CORE_FLOORS`, `MIN_CORE_SIDE` | Rules and constants. |
@@ -152,7 +189,7 @@ A profile is the complete recipe for a city: every engine parameter plus the the
 
 | Export | Purpose |
 |---|---|
-| `buildInfrastructure(layout)` | Build every network for a layout; returns `{ graph, laterals, sewer, water, power, transit, utilidors, stats, checks }` and attaches the OBJ hook. |
+| `buildInfrastructure(layout)` | Build every network for a layout; returns `{ graph, laterals, sewer, water, power, transit, utilidors, stats, checks }` and attaches the OBJ hook. On terrain, `graph.nodes[i].elev`, `sewer.pipes[].slope` (the invert fall), `water.towers[].elev/height/pumped`, `water.prvs[]`, `water.nodeHeadM[]`. |
 | `buildStreetGraph(layout)` | The street graph alone. |
 | `sewerMinSlope(D, g)`, `foundationDepth(b)`, `underground(layout, P, depth)`, `infraToOBJ` | Rules and helpers. |
 | `SEWER`, `WATER`, `POWER`, `TRANSIT`, `UTILIDOR` | Design constants with their sources in the comments. |
@@ -209,9 +246,9 @@ The engine was built to be one stage in a larger pipeline:
 
 ## Verification
 
-- `npm test` runs 74 tests in about three minutes: Bessel values and zeros against scipy, spherical-harmonic orthonormality, mode norms by numerical integration, the square-plate corner convention, drive-point coupling, analytic nodal sets for boulevards, brute-force road-clearance and overlap checks on sampled cities, structural limits across every plate × preset, gravity scaling, OBJ winding and index validity, zip validity (checked with Python's `zipfile`), determinism, input validation; and for the underground, sewer slope/depth/flow conservation, force mains, looped mains and trunk flows, substation ratings and feeder accumulation, junctions at every crossing, brute-force tunnel-clearance over every building, connector lengths, and timing; and for the simulation, profile means and shapes, Hazen-Williams and voltage-drop hand-worked cases, strict head and voltage loss along every loaded main and feeder, Manning partial flow at the design peak, metro conservation and AM/PM reversal link by link, growth determinism and nesting, structural caps through densification, keyframe stats recomputed, impact sets, and agreement between the N-1 tiles and the failure model.
+- `npm test` runs 89 tests in about four minutes: Bessel values and zeros against scipy, spherical-harmonic orthonormality, mode norms by numerical integration, the square-plate corner convention, drive-point coupling, analytic nodal sets for boulevards, brute-force road-clearance and overlap checks on sampled cities, structural limits across every plate × preset, gravity scaling, OBJ winding and index validity, zip validity (checked with Python's `zipfile`), determinism, input validation; and for the underground, sewer slope/depth/flow conservation, force mains, looped mains and trunk flows, substation ratings and feeder accumulation, junctions at every crossing, brute-force tunnel-clearance over every building, connector lengths, and timing; and for the simulation, profile means and shapes, Hazen-Williams and voltage-drop hand-worked cases, strict head and voltage loss along every loaded main and feeder, Manning partial flow at the design peak, metro conservation and AM/PM reversal link by link, growth determinism and nesting, structural caps through densification, keyframe stats recomputed, impact sets, and agreement between the N-1 tiles and the failure model; and for terrain, flat-mode byte identity, ground and freeboard rules for every building and street, bridges that really cross water, one height per plan point, the reported grade against a recompute, arcology faces to open ground by brute force, sewer inverts against the heightfield, plant and tank siting, static heads within limits with valves exercised on 40 m of relief, elevation heads in the flow model, and keyframes that keep it all.
 - The page is rendered headless (Playwright + Chromium) at desktop and phone widths through every view mode, with picking, fly controls and the section cut exercised.
-- Three independent review passes (city layer, underground, simulation) each found real defects that were then fixed and re-verified: the square-plate coordinate convention, modal normalisation, inverted OBJ winding, tunnels missing foundations on long edges, streets crossing without junctions, undersized trunk mains, backup power lines sharing trenches with the lines they backed up.
+- Four independent review passes (city layer, underground, simulation, terrain) each found real defects that were then fixed and re-verified: the square-plate coordinate convention, modal normalisation, inverted OBJ winding, tunnels missing foundations on long edges, streets crossing without junctions, undersized trunk mains, backup power lines sharing trenches with the lines they backed up, a slope cap reading the circle's scale wrong, valves starving the runs that climbed below them, 4 m steps at bridge abutments, and three tests that could not fail (now they can: mutation-tested).
 
 ## Limits and honesty
 
@@ -219,6 +256,7 @@ The engine was built to be one stage in a larger pipeline:
 - Between two modes the plate never fully stands still; the viewer shows the pattern's sharpness and the boulevards follow the dominant standing pattern.
 - The sphere is an idealised scalar model, not a thin elastic shell.
 - Water pressure is static head minus tree losses (loops carry no modelled flow); power flow is a radial voltage-drop model, not a full load flow; metro ridership is a gravity model on a tree; growth is a settlement-order model, not an economic one. Arcology service corridors run through the structure rather than under streets, by design.
+- Terrain is a displacement of the plate, not geology: no erosion, no drainage basins beyond the wave's own, no retaining walls or cut-and-fill. Explicit relief far beyond the automatic one (hundreds of metres on a 3 km plate) gives streets no city could build and pressure zones the 48-pass zoning loop cannot finish; the checks fail and say so. Bridges are decks on piers without approach ramps longer than one street segment.
 - Preset street widths, lot sizes and several planning thresholds are tunables chosen within the ranges in the research notes; the notes mark which numbers are sourced and which are not.
 
 ## Project layout
@@ -229,7 +267,8 @@ src/infrastructure.js     street graph and every underground network
 src/simulation.js         time axis, hourly flows, failure analysis
 src/viewer.html           the 3D page (three.js from a CDN, everything else inline)
 build.mjs                 inlines the modules into dist/
-test/                     physics, city, export and infrastructure suites
+test/                     physics, city, export, infrastructure, simulation and terrain suites
+docs/screenshots/         the gallery above, captured headless
 research_notes/           cymatics physics, city realism, cymatic-architecture claims, utility standards
 reports/                  the research report behind the design
 ```
