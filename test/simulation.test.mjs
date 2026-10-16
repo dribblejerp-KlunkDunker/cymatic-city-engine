@@ -280,6 +280,11 @@ test('resilience: N-1 scores in [0,1], the worst single failure is the max over 
   const w = R.power.worst;
   const r = impact(L, L.infra, w);
   close(r.share, R.power.worstShare, 1e-9, 'tile and Fail button agree');
+  // and the tile really is the maximum over every corridor and substation the Fail button can reach
+  let maxFail = 0;
+  for (let i = 0; i < L.infra.power.transmission.length; i++) maxFail = Math.max(maxFail, impact(L, L.infra, { kind: 'transmission', index: i }).share);
+  for (let i = 0; i < L.infra.power.substations.length; i++) maxFail = Math.max(maxFail, impact(L, L.infra, { kind: 'substation', index: i }).share);
+  close(R.power.worstShare, maxFail, 1e-9, 'N-1 is the worst of all failures');
 });
 
 test('simulation output serialises with the layout and stays deterministic', () => {
