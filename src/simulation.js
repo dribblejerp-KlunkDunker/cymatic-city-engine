@@ -233,6 +233,11 @@ export function flows(layout, infra, hour = 8, opts = {}) {
   const fw = PROFILES.water[h];
   const children = new Map();
   for (const m of infra.water.mains) if (m.tree) (children.get(m.tree[1]) ?? children.set(m.tree[1], []).get(m.tree[1])).push(m);
+  // head[] is the pressure head (m of water) at each node: hydraulic grade line minus ground elevation; on terrain the
+  // tank's own elevation counts, and a pressure-reducing valve resets the grade line to the limit below it
+  const elev = (i) => nodes[i].elev ?? 0;
+  const prvAt = new Set((infra.water.prvs ?? []).map((p) => p.node));
+  const maxHeadM = 56;
   const head = new Float64Array(N), nodePressure = new Float64Array(N);
   const mainsOut = new Map();
   let totalFlow = 0;
@@ -244,9 +249,10 @@ export function flows(layout, infra, hour = 8, opts = {}) {
       for (const m of children.get(u) ?? []) {
         const child = m.tree[0];
         const Q = ((m.distFlow ?? m.flow) / 3.0) * fw; // distribution peak-hour (3×) design flow
-        const hf = hazenWilliams(Q, m.diameter, m.length, C);
-        head[child] = head[u] - hf;
-        mainsOut.set(m.edge, { edge: m.edge, flow: Q, velocity: Q / (Math.PI * m.diameter * m.diameter / 4), headLoss: hf });
+        const hf = hazenWilliams(Q, m.diameter, m.length, C) / (m.barrels ?? 1) ** 1.852;
+        head[child] = head[u] + elev(u) - elev(child) - hf;
+        if (prvAt.has(child)) head[child] = Math.min(head[child], maxHeadM);
+        mainsOut.set(m.edge, { edge: m.edge, flow: Q, velocity: Q / ((m.barrels ?? 1) * Math.PI * m.diameter * m.diameter / 4), headLoss: hf });
         stack.push(child);
       }
     }
