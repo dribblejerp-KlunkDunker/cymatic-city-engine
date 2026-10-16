@@ -506,14 +506,20 @@ export function buildInfrastructure(layout) {
       // because every line out of a source shares that source's own trench
       const island = subs.filter((n) => !seen.has(n)), reachedSubs = subs.filter((n) => seen.has(n));
       const mainland = reachedSubs.length ? reachedSubs : [...sources];
-      let best = null;
-      for (const a of island) for (const b of mainland) { const dd = dist(graph.nodes[a].pos, graph.nodes[b].pos); if (!best || dd < best[2]) best = [a, b, dd]; }
-      if (!best) break;
-      // route the backup away from trenches that already carry a line, so one dig does not take both
+      // candidate pairs nearest first; skip pairs already linked, and skip paths that cannot avoid the worst corridor
+      const linked = new Set(lines.map((l) => `${Math.min(l.from, l.to)}-${Math.max(l.from, l.to)}`));
+      const pairs = [];
+      for (const a of island) for (const b of mainland) if (!linked.has(`${Math.min(a, b)}-${Math.max(a, b)}`)) pairs.push([a, b, dist(graph.nodes[a].pos, graph.nodes[b].pos)]);
+      pairs.sort((x, y) => x[2] - y[2]);
+      const corridorEdges = new Set(); edgeLines.forEach((set, ei) => { if ([...set].sort((x, y) => x - y).join(',') === [...worstSet].sort((x, y) => x - y).join(',')) corridorEdges.add(graph.edges[ei]); });
       const busy = new Set(); for (const l of lines) for (const ei of l.edges) busy.add(graph.edges[ei]);
-      const res = dijkstra(graph, [best[1]], (e) => (busy.has(e) ? e.len * 8 : e.len));
-      if (!Number.isFinite(res.d[best[0]])) break;
-      addLine(best[1], best[0], pathEdges(res, best[0]));
+      let added = false;
+      for (const [a, b] of pairs.slice(0, 6)) {
+        const res = dijkstra(graph, [b], (e) => (corridorEdges.has(e) ? Infinity : busy.has(e) ? e.len * 8 : e.len));
+        if (!Number.isFinite(res.d[a])) continue;
+        addLine(b, a, pathEdges(res, a)); added = true; break;
+      }
+      if (!added) break; // no backup can avoid the worst trench: the score will say so
     }
     const transmission = [];
     const seenEdge = new Map();
@@ -663,6 +669,8 @@ export function buildInfrastructure(layout) {
   check('sewer-depth', 'Deepest sewer', `${maxSewerDepth.toFixed(1)} m, ${sewer.liftStations.length} lift station${sewer.liftStations.length === 1 ? '' : 's'}${stats.forceMains ? `, ${stats.forceMains} force main${stats.forceMains === 1 ? '' : 's'}` : ''}`, maxSewerDepth <= SEWER.maxDepth + 1e-6 ? 'pass' : 'fail', `Runs deeper than ${SEWER.maxDepth} m get a lift station; runs too long for gravity are pumped`);
   check('water-velocity', 'Fastest water main', `${maxVel.toFixed(2)} m/s`, maxVel <= WATER.maxVelocity ? 'pass' : 'fail', 'Sized for 1.5 m/s at peak hour; 2.5 m/s limit');
   check('water-pressure', 'Tank height for 3.4 bar', `${water.towerHeight.toFixed(0)} m${water.pumped ? ' + pumps' : ''}`, water.pumped ? 'warn' : 'pass', 'h = P/(ρ g): the same pressure needs taller tanks at low gravity');
+  check('grid-n1', 'Worst transmission corridor', `${(power.n1Transmission * 100).toFixed(0)} % of people stranded`,
+    power.n1Transmission <= 0.2 + 1e-9 ? 'pass' : power.substations.length < 3 ? 'info' : 'warn', 'Backup lines added until one trench strands no more than 20 %; arcologies with few corridors may not get there');
   check('substation-load', 'Most loaded substation', `${(maxSubLoad * 100).toFixed(0)}% of rating`, maxSubLoad <= 1 ? 'pass' : 'fail', `Zones split until every substation is under its ${POWER.substationMVA[base] ?? 60} MVA rating`);
   if (transit.tunnels.length) {
     check('tunnel-clearance', 'Tunnel clearance under foundations', `${minTunnelClear.toFixed(1)} m`, minTunnelClear >= TRANSIT.clearance - 1e-6 ? 'pass' : 'fail', `Piles ≈ 2 m + 10 % of height; ${TRANSIT.clearance} m clearance (Singapore case histories 4.5–9 m)`);

@@ -264,4 +264,10 @@ test('transmission is meshed: no single line strands more than 20 % of people wh
     // every transmission edge belongs to at least one line, and lines are made of street edges
     for (const t of P.transmission) assert.ok(t.lines.length >= 1 && L.infra.graph.edges[t.edge]);
   }
+  // no duplicate lines between the same pair, on any preset
+  for (const preset of Object.keys(PRESETS)) {
+    const P = full({ preset, frequency: 432 }).infra.power;
+    const pairs = new Set();
+    for (const l of P.lines) { const k = `${Math.min(l.from, l.to)}-${Math.max(l.from, l.to)}`; assert.ok(!pairs.has(k), `${preset}: duplicate line ${k}`); pairs.add(k); }
+  }
 });
