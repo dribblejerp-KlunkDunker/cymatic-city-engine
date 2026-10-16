@@ -383,7 +383,9 @@ export function resolveTerrain(t) {
   if (mode === 'heightmap') {
     const h = spec.heightmap;
     if (!h || !(h.width > 1) || !(h.height > 1) || !h.data || h.data.length < h.width * h.height) throw new Error('A heightmap needs width, height and data (row-major values in 0..1)');
-    heightmap = { width: h.width | 0, height: h.height | 0, data: h.data };
+    const n = (h.width | 0) * (h.height | 0), data = new Float32Array(n);
+    for (let i = 0; i < n; i++) { const x = Number(h.data[i]); if (!Number.isFinite(x)) throw new Error(`Heightmap value ${i} is not a number`); data[i] = clamp(x, 0, 1); }
+    heightmap = { width: h.width | 0, height: h.height | 0, data };
   }
   const relief = spec.relief == null || spec.relief === 'auto' ? 'auto' : clamp(Number(spec.relief), 0, 2000);
   if (relief !== 'auto' && !Number.isFinite(relief)) throw new Error('Relief must be a number of metres or "auto"');
@@ -856,31 +858,73 @@ function liftTo(dom, P, zv) {
   if (dom.kind === 'plane') return [P[0], zv, P[2]];
   const k = (dom.Rs + zv) / len3(P); return [P[0] * k, P[1] * k, P[2] * k];
 }
-export function makeTerrain(p, field, dom, nodalSpacing) {
+// Steepest slope (per metre) of a normalised height function over the plate, from every fourth grid point.
+export function maxFieldSlope(dom, zNorm, grid) {
+  let m = 0;
+  const h = 1e-3;
+  for (let i = 0; i <= grid.ni; i += 4) for (let j = 0; j <= grid.nj; j += 4) {
+    if (!grid.valid[i * grid.W + j]) continue;
+    const [u, v] = grid.coord(i, j);
+    let gu, gv;
+    if (dom.kind === 'sphere') {
+      if (u < 0.05 || u > Math.PI - 0.05) continue;
+      gu = (zNorm(u + h, v) - zNorm(u - h, v)) / (2 * h * dom.Rs);
+      gv = (zNorm(u, v + h) - zNorm(u, v - h)) / (2 * h * dom.Rs * Math.sin(u));
+    } else {
+      const mPerUnit = dom.scale; // toWorld maps one unit of u to dom.scale metres on both plane shapes
+      if (!dom.inside(u + h, v) || !dom.inside(u - h, v) || !dom.inside(u, v + h) || !dom.inside(u, v - h)) continue;
+      gu = (zNorm(u + h, v) - zNorm(u - h, v)) / (2 * h * mPerUnit);
+      gv = (zNorm(u, v + h) - zNorm(u, v - h)) / (2 * h * mPerUnit);
+    }
+    m = Math.max(m, Math.hypot(gu, gv));
+  }
+  return m;
+}
+export const MAX_AUTO_GRADE = 0.09; // the automatic relief keeps the steepest ground under this (local streets ≤ 10 %)
+// Amplitude below which the valleys flood into canals: the lowest `share` of the plate by amplitude, so canals stay
+// a network of channels on every mode rather than swallowing a low mode's wide flat bands.
+export function canalAmplitude(field, grid, share = 0.08) {
+  if (!grid) return 0.05;
+  const vals = [];
+  for (let i = 0; i <= grid.ni; i += 2) for (let j = 0; j <= grid.nj; j += 2) { const id = i * grid.W + j; if (!grid.valid[id]) continue; const [u, v] = grid.coord(i, j); vals.push(field.at(u, v).A); }
+  vals.sort((a, b) => a - b);
+  return clamp(vals[Math.floor(share * (vals.length - 1))] ?? 0.05, 0.005, 0.15);
+}
+export function makeTerrain(p, field, dom, nodalSpacing, grid = null) {
   const t = p.terrain;
   if (t.mode === 'flat') return { mode: 'flat', relief: 0, waterLevel: -Infinity, shore: 0, z: () => 0, lift: (P) => P, elevOf: () => 0, waterAt: () => false };
-  // valleys fold the wave (|S|), which doubles the slopes, so the automatic relief is halved there (never under 3 m)
-  const relief = t.relief === 'auto' ? (t.mode === 'valleys' ? Math.max(3, 0.5 * autoRelief(dom, nodalSpacing)) : autoRelief(dom, nodalSpacing)) : t.relief;
   let zNorm; // −1..1 over the plate
   if (t.mode === 'relief') zNorm = (u, v) => field.S(u, v);
   else if (t.mode === 'valleys') zNorm = (u, v) => 2 * field.at(u, v).A - 1;
   else {
     const { width: W, height: H, data } = t.heightmap;
+    const wrap = dom.kind === 'sphere'; // longitude wraps: the last column blends into the first
     zNorm = (u, v) => {
       // plate coordinates → unit square (sphere: θ/π, φ/2π)
-      const x = dom.kind === 'sphere' ? v / TAU : (u - dom.lo) / (dom.hi - dom.lo);
-      const y = dom.kind === 'sphere' ? u / Math.PI : (v - dom.lo) / (dom.hi - dom.lo);
-      const fx = clamp(x, 0, 1) * (W - 1), fy = clamp(y, 0, 1) * (H - 1);
-      const x0 = Math.floor(fx), y0 = Math.floor(fy), x1 = Math.min(W - 1, x0 + 1), y1 = Math.min(H - 1, y0 + 1), tx = fx - x0, ty = fy - y0;
+      const x = wrap ? ((v / TAU) % 1 + 1) % 1 : (u - dom.lo) / (dom.hi - dom.lo);
+      const y = wrap ? u / Math.PI : (v - dom.lo) / (dom.hi - dom.lo);
+      const fx = wrap ? x * W : clamp(x, 0, 1) * (W - 1), fy = clamp(y, 0, 1) * (H - 1);
+      const x0 = Math.min(W - 1, Math.floor(fx)), y0 = Math.floor(fy), x1 = wrap ? (x0 + 1) % W : Math.min(W - 1, x0 + 1), y1 = Math.min(H - 1, y0 + 1), tx = fx - x0, ty = fy - y0;
       const a = data[y0 * W + x0], b = data[y0 * W + x1], c = data[y1 * W + x0], d = data[y1 * W + x1];
       return 2 * ((a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty) - 1;
     };
   }
+  let relief = t.relief;
+  if (relief === 'auto') {
+    // a fraction of the nodal spacing, then held down so the ground itself never exceeds the street grade limit;
+    // valleys fold the wave (|S|), which doubles the slopes, so they start from half (never under 2 m)
+    relief = t.mode === 'valleys' ? Math.max(2, 0.5 * autoRelief(dom, nodalSpacing)) : autoRelief(dom, nodalSpacing);
+    if (grid) {
+      const slope = maxFieldSlope(dom, zNorm, grid);
+      if (slope > 0) relief = Math.max(1.5, Math.min(relief, MAX_AUTO_GRADE / slope));
+    }
+  }
   const z = (u, v) => relief * zNorm(u, v);
   const waterLevel = t.waterLevel !== 'auto' ? t.waterLevel
-    : t.mode === 'relief' ? -0.45 * relief : t.mode === 'valleys' ? (t.canals ? -0.9 * relief : -Infinity) : -0.6 * relief;
-  // no building closer to the water than this (a metre, or a tenth of a gentle relief)
-  const shore = Math.min(1, 0.1 * relief);
+    : t.mode === 'relief' ? -0.5 * relief : t.mode === 'valleys' ? (t.canals ? relief * (2 * canalAmplitude(field, grid) - 1) : -Infinity) : -0.6 * relief;
+  // freeboard: shore streets are embanked to this height above the water and bridges deck at it;
+  // no building stands below it either (half a metre on a gentle relief, up to three metres)
+  const shore = clamp(0.15 * relief, 0.5, 3);
   const lift = dom.kind === 'plane'
     ? (P) => { const [u, v] = dom.toNorm(P); return [P[0], z(u, v), P[2]]; }
     : (P) => { const [u, v] = dom.toNorm(P); const k = (dom.Rs + z(u, v)) / len3(P); return [P[0] * k, P[1] * k, P[2] * k]; }; // exactly Rs + z from the centre
@@ -946,7 +990,7 @@ export function generateCity(input = {}) {
   };
 
   // terrain is decided before the lots: an arcology's terraces are measured from the ground under them
-  const terrain = makeTerrain(p, field, dom, rd.nodalSpacing);
+  const terrain = makeTerrain(p, field, dom, rd.nodalSpacing, grid);
   if (pr.arcology) {
     // One continuous terraced structure; nodal lines are open canyons, antinodes rise highest.
     // On a sphere the terraces form a shell; keep it under a quarter of the radius so it stays a crust, not spikes.
@@ -979,8 +1023,17 @@ export function generateCity(input = {}) {
     const nbrs = neighbourLists(dom, lots, pr.lot);
     // the faces are measured between terrace tops, so on terrain the ground step under each cell counts
     const zc = lots.map(({ u, v }) => terrain.z(u, v));
-    // open cells are the ground; cells on the plate edge have an open neighbour outside the plate
-    const hv = cellOf.map((bi, i) => zc[i] + (bi < 0 ? 0 : nbrs[i].missing ? Math.min(buildings[bi].h, terraceRise) : buildings[bi].h));
+    // a cell at the edge of the lot grid faces open ground one lot further out: the lowest ground around it
+    const edgeGround = (i) => {
+      if (terrain.mode === 'flat') return 0;
+      const { P, u, v } = lots[i], { fwd, up } = frame(P, u, v), right = cross(fwd, up);
+      let low = zc[i];
+      for (const d of [fwd, scale3(fwd, -1), right, scale3(right, -1)]) { const [uu, vv] = dom.toNorm(add(P, scale3(d, pr.lot))); low = Math.min(low, terrain.z(uu, vv)); }
+      return low;
+    };
+    const edgeZ = cellOf.map((bi, i) => (bi >= 0 && nbrs[i].missing ? edgeGround(i) : null));
+    // open cells are the ground; cells on the plate edge may rise only `terraceRise` above the open ground beside them
+    const hv = cellOf.map((bi, i) => (bi < 0 ? zc[i] : nbrs[i].missing ? Math.min(zc[i] + buildings[bi].h, edgeZ[i] + terraceRise) : zc[i] + buildings[bi].h));
     const done = new Uint8Array(hv.length), heap = new MinHeap();
     hv.forEach((h, i) => heap.push(h, i));
     while (heap.size) {
@@ -995,7 +1048,7 @@ export function generateCity(input = {}) {
       if (h < b.h) binding.slenderness++;
       b.h = h; b.floors = Math.round(h / pr.floorH);
       if (terrain.mode !== 'flat') {
-        let open = nbrs[i].missing ? zc[i] : Infinity;
+        let open = nbrs[i].missing ? edgeZ[i] : Infinity;
         for (const j of nbrs[i]) if (cellOf[j] < 0) open = Math.min(open, zc[j]);
         if (open !== Infinity) b.openGround = open;
       }
@@ -1126,27 +1179,24 @@ export function generateCity(input = {}) {
   }
 
   // ---------------------------------------------------------------- terrain: lift everything onto the ground, flood the basins
-  // measured clearances are taken on the flat plan, before the lift
-  const maxStreetDistance = pr.arcology ? null : buildings.reduce((m, b) => Math.max(m, reach.clearance(b.pos)), 0);
+  // measured clearances are taken on the flat plan, before the lift (the street hashes hold the plan roads, which the
+  // lift moves); the walking reach is kept per building so the shore removal below can drop its lots from the figure
   const minRoadClearance = buildings.reduce((m, b) => Math.min(m, footprintClearance(hash, b, 2)), Infinity);
+  const reachOf = pr.arcology ? null : new Map(buildings.map((b) => [b, reach.clearance(b.pos)]));
   let waterLots = 0, bridges = 0, bridgeLength = 0, maxGrade = 0, waterShare = 0;
   if (terrain.mode !== 'flat') {
-    const deck = terrain.waterLevel + 4;
+    const deck = terrain.waterLevel + terrain.shore;
+    // every street point takes one elevation from its own plan position: the ground, or the embankment level
+    // where the ground is within the freeboard of the water, so streets meeting at a point agree on its height
+    const streetZ = (P) => { const [u, v] = dom.toNorm(P); return Math.max(terrain.z(u, v), deck); };
     for (const r of rd.roads) {
-      const [ua, va] = dom.toNorm(r.a), [ub, vb] = dom.toNorm(r.b);
-      const za = terrain.z(ua, va), zb = terrain.z(ub, vb);
-      const mid = scale3(add(r.a, r.b), 0.5), [um, vm] = dom.toNorm(mid), zm = terrain.z(um, vm);
-      const wet = Math.min(za, zb, zm) < terrain.waterLevel;
+      const za = streetZ(r.a), zb = streetZ(r.b);
+      let wet = false;
+      for (let k = 0; k <= 8 && !wet; k++) { const [u, v] = dom.toNorm(add(r.a, scale3(sub(r.b, r.a), k / 8))); if (terrain.z(u, v) < terrain.waterLevel) wet = true; }
       const planLen = len3(sub(r.b, r.a));
-      if (wet) {
-        // bridges keep a level deck just above the water
-        const lz = Math.max(za, deck), rz = Math.max(zb, deck);
-        r.a = liftTo(dom, r.a, lz); r.b = liftTo(dom, r.b, rz); r.bridge = true; bridges++; bridgeLength += planLen;
-        if (planLen > 0) maxGrade = Math.max(maxGrade, Math.abs(rz - lz) / planLen);
-      } else {
-        r.a = terrain.lift(r.a); r.b = terrain.lift(r.b);
-        if (planLen > 0) maxGrade = Math.max(maxGrade, Math.abs(zb - za) / planLen);
-      }
+      r.a = liftTo(dom, r.a, za); r.b = liftTo(dom, r.b, zb);
+      if (wet) { r.bridge = true; bridges++; bridgeLength += planLen; }
+      if (planLen > 0) maxGrade = Math.max(maxGrade, Math.abs(zb - za) / planLen);
     }
     const keep = [];
     for (const b of buildings) {
@@ -1158,6 +1208,7 @@ export function generateCity(input = {}) {
       keep.push(b);
     }
     buildings.length = 0; buildings.push(...keep);
+    // landmarks that drowned are re-picked below, trees that drowned go
     const keepT = [];
     for (const t of trees) { const [u, v] = dom.toNorm(t.pos); if (terrain.z(u, v) < terrain.waterLevel) continue; t.pos = terrain.lift(t.pos); if (dom.kind === 'sphere') t.up = norm3(t.pos); keepT.push(t); }
     trees.length = 0; trees.push(...keepT);
@@ -1173,6 +1224,7 @@ export function generateCity(input = {}) {
   }
 
   // ---------------------------------------------------------------- stats and plausibility
+  const maxStreetDistance = pr.arcology ? null : buildings.reduce((m, b) => Math.max(m, reachOf.get(b)), 0);
   const roadLen = rd.roads.reduce((s, r) => s + len3(sub(r.b, r.a)), 0);
   const roadArea = rd.roads.reduce((s, r) => s + len3(sub(r.b, r.a)) * r.w, 0);
   const shapeVolume = { block: 1, house: 1, tower: 1, terrace: 1, pod: 0.785, dome: 0.5, spire: 0.33 };
@@ -1239,7 +1291,7 @@ export function generateCity(input = {}) {
       world: { shape: dom.shape, extent: dom.extent, area: dom.area, Rs: dom.Rs ?? null },
       ringLevels: rd.ringLevels, spokeSpacing: rd.spokeSpacing, boulevardWidth: rd.wBoulevard,
       azimuthal: p.azimuthal, sharpness: resp.sharpness,
-      terrain: { mode: terrain.mode, relief: terrain.relief, waterLevel: Number.isFinite(terrain.waterLevel) ? terrain.waterLevel : null, canals: p.terrain.canals, heightmap: p.terrain.heightmap ? { width: p.terrain.heightmap.width, height: p.terrain.heightmap.height } : null },
+      terrain: { mode: terrain.mode, relief: terrain.relief, waterLevel: Number.isFinite(terrain.waterLevel) ? terrain.waterLevel : null, freeboard: terrain.shore, canals: p.terrain.canals, heightmap: p.terrain.heightmap ? { width: p.terrain.heightmap.width, height: p.terrain.heightmap.height } : null },
     },
     roads: rd.roads,
     buildings,
@@ -1380,7 +1432,7 @@ export function fieldPreview(input = {}) {
   // the nodal spacing the city would have (for the automatic relief), from the zero contour length
   let nodal = 0;
   for (const [a, b] of marchingSquares(grid, 0)) { const A = gridPt(dom, grid, a), B = gridPt(dom, grid, b); nodal += len3(sub(B, A)); }
-  const terrain = makeTerrain(p, field, dom, nodal > 0 ? dom.area / nodal : Infinity);
+  const terrain = makeTerrain(p, field, dom, nodal > 0 ? dom.area / nodal : Infinity, grid);
   return {
     at: field.at, toNorm: dom.toNorm, toWorld: dom.toWorld, inside: dom.inside,
     kind: dom.kind, shape: dom.shape, extent: dom.extent, Rs: dom.Rs ?? null, lo: dom.lo, hi: dom.hi,

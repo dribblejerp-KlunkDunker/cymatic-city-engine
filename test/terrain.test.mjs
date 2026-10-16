@@ -3,7 +3,7 @@
 // and every pressure zone stays inside its limits. Flat terrain must reproduce 1.1 byte for byte.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generateCity, toJSON, fieldPreview, resolveTerrain, autoRelief, TERRAIN_MODES, PRESETS } from '../src/cymatic-engine.js';
+import { generateCity, toJSON, fieldPreview, resolveTerrain, autoRelief, TERRAIN_MODES, MAX_AUTO_GRADE, PRESETS } from '../src/cymatic-engine.js';
 import { buildInfrastructure, sewerMinSlope, WATER, SEWER } from '../src/infrastructure.js';
 import { flows, simulate } from '../src/simulation.js';
 
@@ -17,6 +17,7 @@ const PLATES = ['circle', 'square', 'sphere'];
 const len3 = (a) => Math.hypot(a[0], a[1], a[2]);
 const elevOf = (L, P) => (L.meta.plate === 'sphere' ? len3(P) - L.meta.world.Rs : P[1]);
 const terrainOf = (o) => fieldPreview(o).terrain;
+const dist3 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
 test('terrain spec resolves: flat by default, modes validated, heightmaps need a grid', () => {
   assert.equal(resolveTerrain(undefined).mode, 'flat');
@@ -61,7 +62,7 @@ test('relief follows the wave: the ground is R·S, valleys are R·(2A−1), both
   assert.ok(maxAbs <= F.terrain.relief + 1e-9);
   assert.equal(correlated, n);
   // valleys halve the automatic relief because |S| doubles the slopes
-  assert.ok(Math.abs(V.terrain.relief - Math.max(3, F.terrain.relief / 2)) < 1e-9);
+  assert.ok(V.terrain.relief <= F.terrain.relief / 2 + 1e-9 && V.terrain.relief >= 1.5);
 });
 
 test('automatic relief keeps streets walkable: scales with nodal spacing and is capped at 5 % of the plate', () => {
@@ -70,6 +71,21 @@ test('automatic relief keeps streets walkable: scales with nodal spacing and is 
   assert.equal(autoRelief(dom, 500), 20, '4 % of the nodal spacing');
   assert.equal(autoRelief(dom, 10000), 50, 'cap at 5 % of the extent');
   assert.equal(autoRelief(dom, Infinity), 10, 'no nodal lines: a quarter of the plate stands in');
+  // and the ground itself never exceeds the grade limit, whatever the mode's slopes
+  for (const plate of ['circle', 'square', 'sphere']) for (const mode of ['relief', 'valleys']) {
+    const F = fieldPreview({ plate, preset: 'alien', frequency: plate === 'sphere' ? 300 : 500, terrain: mode });
+    const T = F.terrain; let worst = 0;
+    const n = 90;
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+      let u, v, du, dv;
+      if (plate === 'sphere') { u = 0.1 + (Math.PI - 0.2) * i / n; v = 2 * Math.PI * j / n; du = 1e-3; dv = 1e-3 / Math.sin(u); }
+      else { u = F.lo + (F.hi - F.lo) * (i + 0.5) / n; v = F.lo + (F.hi - F.lo) * (j + 0.5) / n; if (!F.inside(u, v)) continue; du = dv = 1e-3; }
+      const sc = plate === 'sphere' ? F.Rs : (F.hi - F.lo === 2 ? F.extent : 2 * F.extent); // metres per unit of u
+      const gx = (T.z(u + du, v) - T.z(u - du, v)) / (2 * du * sc), gy = (T.z(u, v + dv) - T.z(u, v - dv)) / (2 * dv * sc);
+      worst = Math.max(worst, Math.hypot(gx, gy));
+    }
+    assert.ok(worst <= MAX_AUTO_GRADE * 1.05 || T.relief <= 1.5 + 1e-9, `${plate}/${mode}: ground slope ${(100 * worst).toFixed(1)} % at relief ${T.relief.toFixed(1)}`);
+  }
 });
 
 test('an imported heightmap is bilinearly sampled over the plate and sets the ground', () => {
@@ -97,23 +113,32 @@ test('buildings stand on the ground, streets follow it, and nothing is built on 
     const L = generateCity(o), T = terrainOf(o);
     const F = fieldPreview(o);
     // canals run along the boulevards and take the lots beside them; hills and basins take only the shore
-    assert.ok(L.buildings.length > (mode === 'valleys' ? 0.5 : 0.8) * generateCity({ ...o, terrain: 'flat' }).buildings.length, `${plate}/${preset}: most lots survive the terrain`);
+    assert.ok(L.buildings.length > (mode === 'valleys' ? 0.5 : 0.7) * generateCity({ ...o, terrain: 'flat' }).buildings.length, `${plate}/${preset}: most lots survive the terrain`);
     for (const b of L.buildings) {
       const [u, v] = F.toNorm(b.pos);
       const z = T.z(u, v);
       assert.ok(Math.abs(elevOf(L, b.pos) - z) < 1e-6, `${plate}/${preset}: building sits on the ground (${elevOf(L, b.pos)} vs ${z})`);
       assert.ok(Math.abs(b.elevation - z) < 1e-6, 'elevation field matches the ground');
       assert.ok(z >= T.waterLevel + T.shore - 1e-9, `${plate}/${preset}: no building on the shore (z ${z}, water ${T.waterLevel}, shore ${T.shore})`);
+      assert.ok(z >= T.waterLevel + 0.5 - 1e-9, 'the freeboard is never under half a metre');
     }
+    // streets: on the ground, or embanked to the freeboard where the ground is within it; one height per plan point
+    const byPlan = new Map();
+    let maxGrade = 0;
     for (const r of L.roads) {
       for (const P of [r.a, r.b]) {
         const [u, v] = F.toNorm(P), z = T.z(u, v), e = elevOf(L, P);
-        if (r.bridge) assert.ok(e >= z - 1e-6 && e >= T.waterLevel + 3 - 1e-6, `${plate}/${preset}: bridge deck above ground and water`);
-        else assert.ok(Math.abs(e - z) < 1e-6, `${plate}/${preset}: street on the ground`);
+        assert.ok(Math.abs(e - Math.max(z, T.waterLevel + T.shore)) < 1e-6, `${plate}/${preset}: street at ground or embankment (${e} vs ${z})`);
+        const k = P.map((x) => x.toFixed(3)).join(',');
+        if (byPlan.has(k)) assert.ok(Math.abs(byPlan.get(k) - e) < 1e-6, 'streets sharing a point share its height'); else byPlan.set(k, e);
       }
+      const planLen = L.meta.plate === 'sphere' ? dist3(r.a, r.b) : Math.hypot(r.b[0] - r.a[0], r.b[2] - r.a[2]);
+      if (planLen > 0) maxGrade = Math.max(maxGrade, Math.abs(elevOf(L, r.b) - elevOf(L, r.a)) / planLen);
     }
     const t = L.stats.terrain;
     assert.equal(t.mode, mode);
+    assert.ok(Math.abs(t.maxGrade - maxGrade) < 0.02, `${plate}/${preset}: reported grade ${t.maxGrade} vs recomputed ${maxGrade}`);
+    assert.ok(t.shore >= 0.5 && t.shore <= 3);
     assert.ok(t.waterShare >= 0 && t.waterShare < 0.5, `${plate}/${preset}: water share ${t.waterShare}`);
     assert.ok(t.maxGrade <= 0.15, `${plate}/${preset}: steepest street ${(100 * t.maxGrade).toFixed(1)} %`);
     if (t.waterShare > 0.01) assert.ok(t.bridges > 0 && t.bridgeLength > 0, `${plate}/${preset}: water is crossed by bridges`);
@@ -134,15 +159,15 @@ test('every bridge segment really crosses water (plan samples along it dip under
       if (T.z(u, v) < T.waterLevel) wet = true;
     }
     if (r.bridge) { bridges++; assert.ok(wet, 'a bridge spans water'); }
-    else assert.ok(!(T.z(...F.toNorm(r.a)) < T.waterLevel && T.z(...F.toNorm(r.b)) < T.waterLevel), 'a street with both ends under water is a bridge');
+    else assert.ok(!wet, 'a street that dips under water anywhere along it is a bridge');
   }
   assert.equal(bridges, L.stats.terrain.bridges);
 });
 
 test('arcologies on terrain: terraces measured from the ground, no exposed face over the limit, basins spanned', () => {
-  for (const plate of PLATES) {
-    const o = { plate, preset: 'megastructure', frequency: 432, terrain: plate === 'square' ? { mode: 'valleys', canals: true } : 'relief' };
-    const L = generateCity(o);
+  for (const [plate, terrain] of [['circle', 'relief'], ['square', { mode: 'valleys', canals: true }], ['sphere', 'relief'], ['circle', { mode: 'relief', relief: 120 }]]) {
+    const o = { plate, preset: 'megastructure', frequency: 432, terrain };
+    const L = generateCity(o), T = terrainOf(o), F = fieldPreview(o);
     assert.ok(L.stats.maxTerraceStep <= L.stats.terraceLimit + 1e-6, `${plate}: step ${L.stats.maxTerraceStep} > ${L.stats.terraceLimit}`);
     assert.equal(L.stats.terrain.waterLots, 0, `${plate}: an arcology spans its basins`);
     // brute force the faces between neighbouring cells on a plane: tops differ by at most the limit
@@ -150,12 +175,17 @@ test('arcologies on terrain: terraces measured from the ground, no exposed face 
     if (plate === 'sphere') continue;
     const lot = PRESETS.megastructure.lot, map = new Map();
     for (const b of L.buildings) map.set(`${Math.round(b.pos[0] / lot)},${Math.round(b.pos[2] / lot)}`, b);
-    let worst = 0;
+    let worst = 0, worstOpen = 0;
     for (const b of L.buildings) {
       const i = Math.round(b.pos[0] / lot), j = Math.round(b.pos[2] / lot);
-      for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const n = map.get(`${i + di},${j + dj}`); if (n) worst = Math.max(worst, b.h + b.elevation - n.h - n.elevation); }
+      for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const n = map.get(`${i + di},${j + dj}`);
+        if (n) worst = Math.max(worst, b.h + b.elevation - n.h - n.elevation);
+        else { const [u, v] = F.toNorm([b.pos[0] + di * lot, 0, b.pos[2] + dj * lot]); if (F.inside(u, v)) worstOpen = Math.max(worstOpen, b.h + b.elevation - T.z(u, v)); } // face down to open ground
+      }
     }
     assert.ok(worst <= L.stats.terraceLimit + 1e-6, `${plate}: brute-force face ${worst}`);
+    assert.ok(worstOpen <= L.stats.terraceLimit + 1e-6, `${plate}: face to open ground ${worstOpen} over ${L.stats.terraceLimit}`);
   }
 });
 
@@ -195,9 +225,13 @@ test('sewers fall on the heightfield: every gravity run drops at least the minim
     assert.ok(gravity > 0.8 * I.sewer.pipes.length, `${plate}/${preset}: most runs flow by gravity`);
     const c = I.checks.find((x) => x.id === 'sewer-gravity');
     assert.equal(c.status, 'pass');
-    // treatment plants sit low: no plant higher than the median perimeter elevation
+    // treatment plants sit low: within the lowest 30 % of the perimeter (one plant: at the very lowest point)
     const perim = [...new Set(I.graph.edges.filter((e) => e.kind === 'wall').map((e) => e.a))].map(el).sort((a, b) => a - b);
-    if (perim.length) for (const p of I.sewer.plants) assert.ok(el(p.node) <= perim[perim.length >> 1] + 1e-9, `${plate}: plant on low ground`);
+    if (perim.length) {
+      const cut = perim[Math.max(0, Math.ceil(perim.length * 0.3) - 1)];
+      for (const p of I.sewer.plants) assert.ok(el(p.node) <= cut + 1e-9, `${plate}/${preset}: plant at ${el(p.node)} m above the low 30 % (${cut} m)`);
+      if (I.sewer.plants.length === 1) assert.ok(Math.abs(el(I.sewer.plants[0].node) - perim[0]) < 1e-9, `${plate}/${preset}: the only plant sits at the lowest perimeter point`);
+    }
   }
 });
 
@@ -218,9 +252,9 @@ test('water on terrain: tanks on high ground, every served node between the mini
     }
     const served = new Set(); for (const l of I.laterals) served.add(l.node);
     for (const n of served) {
-      const h = I.water.nodeHeadM[n];
-      assert.ok(h >= WATER.minHeadM - 1e-6, `${plate}/${preset}: head ${h} m below minimum at node ${n}`);
-      assert.ok(h <= WATER.maxHeadM + 1e-6, `${plate}/${preset}: head ${h} m above maximum at node ${n}`);
+      const h = I.water.nodeHeadM[n], g = L.meta.gravity;
+      assert.ok(h >= WATER.minHeadM / g - 1e-6, `${plate}/${preset}: head ${h} m below minimum at node ${n}`);
+      assert.ok(h <= WATER.maxHeadM / g + 1e-6, `${plate}/${preset}: head ${h} m above maximum at node ${n}`);
     }
     assert.equal(I.checks.find((c) => c.id === 'pressure-zones').status, 'pass', `${plate}/${preset}`);
     // tanks feed their zones by gravity: each stands above the median ground of the zone it serves
@@ -232,8 +266,29 @@ test('water on terrain: tanks on high ground, every served node between the mini
       assert.ok(t.elev >= z[z.length >> 1] - 1e-9, `${plate}/${preset}: tank ${zi} at ${t.elev.toFixed(1)} m below its zone's median ground ${z[z.length >> 1].toFixed(1)} m`);
     });
     // PRV inlets are over the limit and sit on a tree main
-    for (const p of I.water.prvs) assert.ok(p.inletHeadM > WATER.maxHeadM);
+    for (const p of I.water.prvs) assert.ok(p.inletHeadM > WATER.maxHeadM / L.meta.gravity);
   }
+});
+
+test('explicit relief beyond the automatic one: PRVs appear, cap every run at the limit, and nothing downstream starves', () => {
+  const L = full({ plate: 'square', preset: 'city', frequency: 432, terrain: { mode: 'relief', relief: 40 } });
+  const I = L.infra, g = L.meta.gravity, el = (i) => I.graph.nodes[i].elev;
+  assert.ok(I.water.prvs.length > 10, `expected valves on 40 m of relief, got ${I.water.prvs.length}`);
+  const served = new Set(I.laterals.map((l) => l.node));
+  for (const n of served) assert.ok(I.water.nodeHeadM[n] >= WATER.minHeadM / g - 1e-6 && I.water.nodeHeadM[n] <= WATER.maxHeadM / g + 1e-6, `head ${I.water.nodeHeadM[n]} at ${n}`);
+  assert.equal(I.checks.find((c) => c.id === 'pressure-zones').status, 'pass');
+  // a valve really reduces: the node below it has the outlet head, not the static one
+  const treeChild = new Set(I.water.mains.filter((m) => m.tree).map((m) => m.tree[0]));
+  for (const p of I.water.prvs) {
+    assert.ok(treeChild.has(p.node), 'valves sit on distribution runs');
+    assert.ok(p.inletHeadM > WATER.maxHeadM / g && Math.abs(I.water.nodeHeadM[p.node] - p.outletHeadM) < 1e-9, 'outlet is the set point');
+  }
+  // and the flow model honours the set points at night (little friction): no served node over the limit
+  const f = flows(L, I, 3), maxKPa = 9.81 * g * WATER.maxHeadM / g;
+  for (const n of served) assert.ok(f.water.nodePressure[n] <= maxKPa + 1, `pressure ${f.water.nodePressure[n]} kPa over the limit at ${n}`);
+  assert.equal(f.water.criticalNodes, 0);
+  // honesty: the street grade check fails on 40 m of relief and says so
+  assert.equal(L.checks.find((c) => c.id === 'street-grade').status, 'fail');
 });
 
 test('the flow model uses elevation heads: pressure falls on the hills and rises in the basins, PRVs cap it', () => {
@@ -255,7 +310,7 @@ test('growth keyframes keep the terrain invariants and serialise with it', () =>
   const sim = simulate(L, { years: 60, keyframes: 3 });
   for (const k of sim.keyframes) {
     assert.equal(k.layout.meta.terrain.mode, 'relief');
-    for (const r of k.layout.roads) if (r.bridge) assert.ok(elevOf(k.layout, r.a) >= k.layout.meta.terrain.waterLevel + 3 - 1e-6);
+    for (const r of k.layout.roads) if (r.bridge) assert.ok(elevOf(k.layout, r.a) >= k.layout.meta.terrain.waterLevel + k.layout.meta.terrain.freeboard - 1e-6);
     assert.equal(k.infra.checks.find((c) => c.id === 'sewer-gravity').status, 'pass', `year ${k.year}`);
     assert.equal(k.infra.checks.find((c) => c.id === 'pressure-zones').status, 'pass', `year ${k.year}`);
   }

@@ -326,6 +326,8 @@ export function buildInfrastructure(layout) {
 
   const terrainOn = !!(meta.terrain && meta.terrain.mode !== 'flat');
   const elev = Float64Array.from(graph.nodes, (n) => n.elev ?? 0);
+  // pressure limits are pressures: the heads that give them scale as 1/g, like the tank height
+  const minHeadM = WATER.minHeadM / g, maxHeadM = WATER.maxHeadM / g;
   // bridges carry no trench: utilities avoid them where a ground route exists
   const trenchWeight = (e) => (e.bridge ? 4 * e.len : e.len);
 
@@ -376,7 +378,8 @@ export function buildInfrastructure(layout) {
       else {
         downDepth = downFor(upDepth);
         // the actual fall of the invert, steeper than the minimum where the ground drops
-        pipeSlope = ((elev[u] - upDepth) - (elev[p] - downDepth)) / e.len;
+        const fall = ((elev[u] - upDepth) - (elev[p] - downDepth)) / e.len;
+        pipeSlope = Math.abs(fall - slope) < 1e-9 ? slope : fall;
       }
       nodeDepth[u] = upDepth;
       nodeDepth[p] = Math.max(nodeDepth[p], downDepth);
@@ -426,13 +429,45 @@ export function buildInfrastructure(layout) {
       towerNodes.forEach((t, zi) => {
         const z = zoneElevs[zi].sort((a, b) => a - b); if (!z.length) return;
         const median = z[z.length >> 1], top = z[z.length - 1];
-        // the median customer gets the design head, and the highest customer still gets the minimum
-        tankHeight[zi] = clamp(Math.max(towerHeight - (elev[t] - median), WATER.minHeadM + top - elev[t]), 10, towerHeight);
+        // the median customer gets the design head, and the highest customer still gets the minimum; a tank that would
+        // have to stand taller than the design height to manage that is pumped (up to the tall-tank limit)
+        tankHeight[zi] = clamp(Math.max(towerHeight - (elev[t] - median), minHeadM + top - elev[t]), 10, Math.max(towerHeight, WATER.maxTowerHeight));
       });
     };
     sizeTanks();
     const staticHead = (i) => (src[i] < 0 ? 0 : elev[towerNodes[src[i]]] + tankHeight[src[i]] - elev[i]);
-    for (let iter = 0; iter < 16; iter++) {
+    // static head at every node with pressure-reducing valves placed along the forest: where a run has dropped so far
+    // below its tank that the head passes the limit, a valve resets the hydraulic grade line to the design head and
+    // the nodes below it see that instead; a branch that climbs again out of a basin can still run short, which the
+    // zone loop fixes with a tank of its own
+    const outletHead = Math.min(towerHeight, maxHeadM);
+    const prvHeads = () => {
+      const heads = new Float64Array(N), prvList = [];
+      for (let i = 0; i < N; i++) heads[i] = src[i] >= 0 ? staticHead(i) : towerHeight;
+      if (!terrainOn) return { heads, prvs: prvList };
+      const kids = new Map();
+      for (let i = 0; i < N; i++) if (parent[i] >= 0) (kids.get(parent[i]) ?? kids.set(parent[i], []).get(parent[i])).push(i);
+      // highest customer ground downstream of each node, so a valve's set point can be chosen to keep it served
+      const subTop = new Float64Array(N).fill(-Infinity);
+      for (const u of leavesFirst(d)) { subTop[u] = Math.max(subTop[u], bAt[u] ? elev[u] : -Infinity); if (parent[u] >= 0) subTop[parent[u]] = Math.max(subTop[parent[u]], subTop[u]); }
+      for (const t of towerNodes) {
+        const stack = [[t, Infinity]]; // [node, hydraulic grade line (absolute) after the last valve upstream]
+        while (stack.length) {
+          const [u, hgl] = stack.pop();
+          let h = hgl;
+          if (h !== Infinity) heads[u] = Math.min(heads[u], h - elev[u]);
+          if (heads[u] > maxHeadM + 1e-9) {
+            // set point: the design head, raised as far as the limit allows when the run climbs again below the valve
+            const need = Number.isFinite(subTop[u]) ? minHeadM + subTop[u] - elev[u] + 0.01 : 0;
+            const out = clamp(Math.max(outletHead, need), outletHead, maxHeadM);
+            prvList.push({ node: u, pos: graph.nodes[u].pos, inletHeadM: heads[u], outletHeadM: out }); heads[u] = out; h = elev[u] + out;
+          }
+          for (const v of kids.get(u) ?? []) stack.push([v, h]);
+        }
+      }
+      return { heads, prvs: prvList };
+    };
+    for (let iter = 0; iter < 48; iter++) {
       if (terrainOn) {
         // each tank climbs to the highest customer of the zone it ended up serving (a hill in the zone beats the rim)
         let moved = false;
@@ -450,8 +485,9 @@ export function buildInfrastructure(layout) {
       if (terrainOn) {
         // ground too high for its tank: a new tank on the highest starved node serves the high zone
         let hi = -1;
-        for (const i of loadNodes) if (staticHead(i) < WATER.minHeadM && (hi < 0 || elev[i] > elev[hi])) hi = i;
-        if (hi >= 0) extra.push(highGround(hi, towerNodes)); // the highest ground near it that has no tank yet
+        const { heads } = prvHeads();
+        for (const i of loadNodes) if (heads[i] < minHeadM - 1e-6 && (hi < 0 || elev[i] > elev[hi])) hi = i;
+        if (hi >= 0) extra.push(hi); // a tank of its own at the highest starved customer: nothing else is sure to reach it
       }
       const fresh = [...new Set(extra)].filter((n) => !towerNodes.includes(n));
       if (!fresh.length) break;
@@ -498,28 +534,9 @@ export function buildInfrastructure(layout) {
       m.velocity = m.flow / (barrels * Math.PI * m.diameter * m.diameter / 4);
       mains.set(ei, m); trunkMains.push(m);
     }
-    const towers = towerNodes.map((n, zi) => ({ node: n, pos: graph.nodes[n].pos, elev: elev[n], height: tankHeight[zi], pumped, storageM3: zoneDemand[zi] * 86400, served: Math.round(zonePop[zi]), demandM3Day: zoneDemand[zi] * 86400 }));
-    // static head per node (m of water); pressure-reducing valves where a run drops below its tank by more than the limit
-    const nodeHeadM = new Float64Array(N), prvs = [], prvNode = new Uint8Array(N);
-    for (let i = 0; i < N; i++) nodeHeadM[i] = src[i] >= 0 ? staticHead(i) : towerHeight;
-    if (terrainOn) {
-      // walk each zone's tree from the tank: a PRV at the first node over the limit caps everything downstream
-      const kids = new Map();
-      for (const m of mains.values()) if (m.tree) (kids.get(m.tree[1]) ?? kids.set(m.tree[1], []).get(m.tree[1])).push(m.tree[0]);
-      for (const t of towerNodes) {
-        const stack = [[t, Infinity]]; // [node, hydraulic grade line (absolute) after the last valve upstream]
-        while (stack.length) {
-          const [u, hgl] = stack.pop();
-          let h = hgl;
-          if (h !== Infinity) nodeHeadM[u] = Math.min(nodeHeadM[u], h - elev[u]);
-          if (nodeHeadM[u] > WATER.maxHeadM + 1e-9) {
-            prvs.push({ node: u, pos: graph.nodes[u].pos, inletHeadM: nodeHeadM[u] }); prvNode[u] = 1;
-            nodeHeadM[u] = WATER.maxHeadM; h = elev[u] + WATER.maxHeadM;
-          }
-          for (const v of kids.get(u) ?? []) stack.push([v, h]);
-        }
-      }
-    }
+    const towers = towerNodes.map((n, zi) => ({ node: n, pos: graph.nodes[n].pos, elev: elev[n], height: tankHeight[zi], pumped: pumped || tankHeight[zi] > towerHeight + 1e-9, storageM3: zoneDemand[zi] * 86400, served: Math.round(zonePop[zi]), demandM3Day: zoneDemand[zi] * 86400 }));
+    // static head per node (m of water) with the pressure-reducing valves in place
+    const { heads: nodeHeadM, prvs } = prvHeads();
     const nodeHead = new Float64Array(N);
     for (const m of mains.values()) { nodeHead[m.a] = (1000 * G0 * g * nodeHeadM[m.a]) / 1e5; nodeHead[m.b] = (1000 * G0 * g * nodeHeadM[m.b]) / 1e5; } // bar, static
     const plant = { node: plantNode, pos: graph.nodes[plantNode].pos, capacityM3Day: zoneDemand.reduce((s, x) => s + x, 0) * 86400 * WATER.maxDay };
@@ -789,7 +806,7 @@ export function buildInfrastructure(layout) {
   if (terrainOn) {
     const kPa = (h) => (G0 * g * h).toFixed(0);
     check('pressure-zones', 'Static pressure across the terrain', `${kPa(minHead)}–${kPa(maxHead)} kPa, ${water.towers.length} zone${water.towers.length === 1 ? '' : 's'}, ${water.prvs.length} PRV${water.prvs.length === 1 ? '' : 's'}`,
-      minHead >= WATER.minHeadM - 1e-6 && maxHead <= WATER.maxHeadM + 1e-6 ? 'pass' : 'fail', `Tanks on the high ground; a zone splits below ${kPa(WATER.minHeadM)} kPa, a valve drops anything above ${kPa(WATER.maxHeadM)} kPa`);
+      minHead >= minHeadM - 1e-6 && maxHead <= maxHeadM + 1e-6 ? 'pass' : 'fail', `Tanks on the high ground; a zone splits below ${kPa(minHeadM)} kPa, a valve drops anything above ${kPa(maxHeadM)} kPa`);
     const gravityPipes = sewer.pipes.filter((p) => !p.forceMain);
     const falling = gravityPipes.filter((p) => (elev[p.up] - p.upDepth) - (elev[p.down] - p.downDepth) >= sewerMinSlope(p.diameter, g) * p.length - 1e-6).length;
     check('sewer-gravity', 'Sewers falling on the heightfield', `${falling} of ${gravityPipes.length} gravity runs`, falling === gravityPipes.length ? 'pass' : 'fail', 'Invert out = invert in − slope × length, checked against ground elevation at both manholes');

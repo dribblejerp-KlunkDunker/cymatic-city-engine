@@ -107,6 +107,7 @@ export function cityStats(layout) {
 
 // ---------------------------------------------------------------- growth
 export function simulate(layout, opts = {}) {
+  if (!layout.buildings.length) throw new Error('Nothing to simulate: the city has no buildings (is everything under water?)');
   const years = Math.max(5, Number(opts.years ?? 100));
   const K = Math.max(2, Math.min(24, Number(opts.keyframes ?? 8)));
   const infra = layout.infra ?? buildInfrastructure(layout);
@@ -236,8 +237,7 @@ export function flows(layout, infra, hour = 8, opts = {}) {
   // head[] is the pressure head (m of water) at each node: hydraulic grade line minus ground elevation; on terrain the
   // tank's own elevation counts, and a pressure-reducing valve resets the grade line to the limit below it
   const elev = (i) => nodes[i].elev ?? 0;
-  const prvAt = new Set((infra.water.prvs ?? []).map((p) => p.node));
-  const maxHeadM = 56;
+  const prvAt = new Map((infra.water.prvs ?? []).map((p) => [p.node, p.outletHeadM ?? 56 / g]));
   const head = new Float64Array(N), nodePressure = new Float64Array(N);
   const mainsOut = new Map();
   let totalFlow = 0;
@@ -251,7 +251,7 @@ export function flows(layout, infra, hour = 8, opts = {}) {
         const Q = ((m.distFlow ?? m.flow) / 3.0) * fw; // distribution peak-hour (3×) design flow
         const hf = hazenWilliams(Q, m.diameter, m.length, C) / (m.barrels ?? 1) ** 1.852;
         head[child] = head[u] + elev(u) - elev(child) - hf;
-        if (prvAt.has(child)) head[child] = Math.min(head[child], maxHeadM);
+        if (prvAt.has(child)) head[child] = Math.min(head[child], prvAt.get(child)); // the valve's set point
         mainsOut.set(m.edge, { edge: m.edge, flow: Q, velocity: Q / ((m.barrels ?? 1) * Math.PI * m.diameter * m.diameter / 4), headLoss: hf });
         stack.push(child);
       }
@@ -262,8 +262,10 @@ export function flows(layout, infra, hour = 8, opts = {}) {
   for (const m of infra.water.mains) if (m.tree) served[m.tree[0]] = 1;
   for (let i = 0; i < N; i++) nodePressure[i] = served[i] ? Math.max(0, 9.81 * g * head[i]) : 0;
   totalFlow = infra.laterals.reduce((s, l) => s + ((l.residents * 300 + l.jobs * 60) / 86400 / 1000) * fw, 0);
+  // pressure flags count nodes with customers: a main crossing an empty hilltop may run low without anyone noticing
+  const customer = new Uint8Array(N); for (const l of infra.laterals) customer[l.node] = 1;
   let minPressure = Infinity, lowNodes = 0, criticalNodes = 0;
-  for (let i = 0; i < N; i++) if (served[i]) { minPressure = Math.min(minPressure, nodePressure[i]); if (nodePressure[i] < 241) lowNodes++; if (nodePressure[i] < 140) criticalNodes++; }
+  for (let i = 0; i < N; i++) if (served[i] && customer[i]) { minPressure = Math.min(minPressure, nodePressure[i]); if (nodePressure[i] < 241) lowNodes++; if (nodePressure[i] < 140) criticalNodes++; }
   const water = { nodePressure, minPressure: Number.isFinite(minPressure) ? minPressure : 0, lowNodes, criticalNodes, totalFlow, mains: [...mainsOut.values()], staticKPa: 9.81 * g * infra.water.towerHeight };
 
   // ---- power: voltage drop along feeders from each substation bus
