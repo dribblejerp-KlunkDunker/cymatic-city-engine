@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { generateCity, heightLimit, slendernessLimit, PRESETS, toJSON } from '../src/cymatic-engine.js';
 import { buildInfrastructure, sewerMinSlope, WATER, TRANSIT } from '../src/infrastructure.js';
 import {
-  simulate, flows, impact, resilience, PROFILES, hazenWilliams, voltageDrop, partialFlowDepth, cableFor, LIFETIMES,
+  simulate, flows, impact, resilience, PROFILES, PEAK_HOUR, hazenWilliams, voltageDrop, partialFlowDepth, cableFor, LIFETIMES, POWER_FLOW,
 } from '../src/simulation.js';
 
 const cache = new Map();
@@ -102,6 +102,8 @@ test('keyframes are complete cities that keep the 1.0 invariants and grow', () =
   }
   const last = S.keyframes[S.keyframes.length - 1];
   assert.equal(last.layout.buildings.length, L.buildings.length, 'the last keyframe holds every building');
+  assert.ok(S.keyframes[0].stats.population < 0.2 * last.stats.population, 'early keyframes are small towns, not copies of the final city');
+  assert.ok(S.keyframes[0].layout.stats.population === S.keyframes[0].stats.population && S.keyframes[0].layout.checks.length > 5, 'keyframe layouts carry their own stats and checks');
   assert.ok(last.stats.gfaM2 >= S.keyframes[0].stats.gfaM2);
   // streets appear connected: every keyframe's road set is a connected graph through the founding node
   assert.ok(S.keyframes[0].infra.graph.connectors <= 3, 'early street network is not a scatter of fragments');
@@ -130,11 +132,23 @@ test('water flow: pressure falls along every main, never below the tank head, fl
   const W = F.water;
   const g = L.meta.gravity, headKPa = 9.81 * g * L.infra.water.towerHeight;
   for (const t of L.infra.water.towers) close(W.nodePressure[t.node], headKPa, 1e-6, 'tank node at static head');
+  let strict = 0;
   for (const m of L.infra.water.mains) {
-    if (m.kind !== 'distribution') continue;
-    assert.ok(W.nodePressure[m.a] <= W.nodePressure[m.b] + 1e-9, 'pressure drops away from the tank');
-    assert.ok(W.nodePressure[m.a] <= headKPa + 1e-9);
+    if (!m.tree) continue;
+    const [child, parent] = m.tree;
+    assert.ok(W.nodePressure[child] <= W.nodePressure[parent] + 1e-9, 'pressure drops away from the tank');
+    if ((m.distFlow ?? m.flow) > 0) { assert.ok(W.nodePressure[child] < W.nodePressure[parent], 'a flowing main loses head'); strict++; }
+    assert.ok(W.nodePressure[child] <= headKPa + 1e-9);
   }
+  assert.ok(strict > 100, 'many mains carry flow');
+  // hand-worked: the first main below a tank loses exactly the Hazen-Williams head of its hourly flow
+  const t0 = L.infra.water.towers[0];
+  const first = L.infra.water.mains.find((m) => m.tree && m.tree[1] === t0.node && (m.distFlow ?? m.flow) > 0);
+  const Q = ((first.distFlow ?? first.flow) / 3) * PROFILES.water[7];
+  close(W.nodePressure[first.tree[0]], 9.81 * g * (t0.height - hazenWilliams(Q, first.diameter, first.length, 130)), 1e-6, 'first main below the tank');
+  // served nodes with no head still count as critical, never vanish
+  const dry = flows(L, L.infra, 7, { hazenC: 20 });
+  assert.ok(dry.water.criticalNodes > W.criticalNodes && dry.water.minPressure <= W.minPressure);
   assert.equal(W.lowNodes, W.nodePressure.filter((p, i) => p > 0 && p < 241).length);
   assert.ok(W.minPressure > 0);
   // hourly demand scales flow: 3 am carries less than 7 am
@@ -149,9 +163,20 @@ test('power flow: voltage drops along feeders, loading in [0, ∞), substations 
   const P = F.power;
   for (const s of L.infra.power.substations) close(P.nodeVoltage[s.node], 1, 1e-12, 'substation bus at 1.0 pu');
   for (const f of L.infra.power.feeders) {
-    assert.ok(P.nodeVoltage[f.a] <= P.nodeVoltage[f.b] + 1e-12, 'voltage falls away from the substation');
+    assert.ok(P.nodeVoltage[f.a] < P.nodeVoltage[f.b], 'voltage falls along every loaded feeder');
     assert.ok(P.nodeVoltage[f.a] > 0.8);
   }
+  // hand-worked: first feeder below substation 0
+  const s0 = L.infra.power.substations[0], f0 = L.infra.power.feeders.find((f) => f.b === s0.node);
+  const I = (f0.loadMVA * 1e6 * P.blend) / (Math.sqrt(3) * 11e3), cable = cableFor(f0.classMVA);
+  const pfMix = P.feeders.length ? null : null; void pfMix;
+  const dv = P.feeders.find((x) => x.edge === f0.edge).dropV;
+  close(P.nodeVoltage[f0.a], 1 - dv / 11e3, 1e-12, 'bus minus the computed drop');
+  assert.ok(dv > voltageDrop(I, f0.length / 1000, cable.R, POWER_FLOW.X / cable.parallel, 0.95) * 0.9 && dv < voltageDrop(I, f0.length / 1000, cable.R, POWER_FLOW.X / cable.parallel, 0.9) * 1.1, 'drop between the residential and commercial power-factor cases');
+  // the hourly factor is normalised so the design peak is the busiest hour
+  const blends = Array.from({ length: 24 }, (_, hh) => flows(L, L.infra, hh).power.blend);
+  close(Math.max(...blends), 1, 1e-12, 'peak hour factor is 1');
+  assert.ok(Math.min(...blends) < 0.6);
   for (const x of P.feeders) assert.ok(x.loading >= 0 && Number.isFinite(x.loading));
   assert.equal(P.underVoltage, P.nodeVoltage.filter((v, i) => v > 0 && v < 0.95).length);
   const noon = flows(L, L.infra, 13);
@@ -165,8 +190,12 @@ test('sewer flow: fullness from Manning partial flow, design peak hour reaches t
   for (const p of F.sewer.pipes) { assert.ok(p.fullness >= 0); if (!p.forceMain) assert.ok(p.fullness <= 1.2); }
   const peakHour = PROFILES.sewage.indexOf(Math.max(...PROFILES.sewage));
   const peak = flows(L, L.infra, peakHour);
-  assert.ok(Math.max(...peak.sewer.pipes.map((p) => p.fullness)) <= 1.0 + 1e-6, 'designed for 80 % full at peak, so no surcharge in dry weather');
+  const maxFull = Math.max(...peak.sewer.pipes.filter((p) => !p.forceMain).map((p) => p.fullness));
+  close(maxFull, partialFlowDepth(0.8), 0.02, 'the tightest pipe runs at the 80 % design flow at peak hour');
+  assert.ok(maxFull > 0.6);
   assert.equal(peak.sewer.surcharged, 0);
+  const night = flows(L, L.infra, 3);
+  assert.ok(Math.max(...night.sewer.pipes.map((p) => p.fullness)) < maxFull);
 });
 
 test('metro: trips conserve, link loads sit on the tunnel tree, AM and PM reverse direction', () => {
@@ -179,8 +208,10 @@ test('metro: trips conserve, link loads sit on the tunnel tree, AM and PM revers
   close(boardings, T.hourTrips, 1e-6 * T.dailyTrips, 'everyone who travels boards somewhere');
   assert.equal(T.links.length, L.infra.transit.tunnels.length);
   for (const l of T.links) assert.ok(l.capacity > 0 && l.loadAB >= 0 && l.loadBA >= 0);
-  const amDir = T.links.reduce((s, l) => s + l.loadAB - l.loadBA, 0), pmDir = pm.transit.links.reduce((s, l) => s + l.loadAB - l.loadBA, 0);
-  assert.ok(Math.sign(amDir) === -Math.sign(pmDir) || amDir === 0, 'the tide turns');
+  const totalLoad = T.links.reduce((s, l) => s + l.loadAB + l.loadBA, 0);
+  assert.ok(totalLoad >= T.hourTrips, 'every trip rides at least one link');
+  assert.ok(T.links.some((l) => l.loadAB > 0) && T.links.some((l) => l.loadBA > 0));
+  for (let i = 0; i < T.links.length; i++) { close(T.links[i].loadAB, pm.transit.links[i].loadBA * (PROFILES.rail[8] / PROFILES.rail[17]), 1e-6 * T.hourTrips, 'PM reverses AM link by link'); }
 });
 
 test('a town (no metro) and an arcology still flow', () => {
@@ -212,8 +243,12 @@ test('impact: substation, feeder subtree, transmission subtree, treatment plant,
   assert.equal(sub.affected.length, zoneBuildings);
   const f = impact(L, I, { kind: 'power', index: 0 });
   assert.ok(f.affected.length >= 1 && f.affected.length <= zoneBuildings || f.affected.length >= 1);
-  const tx = impact(L, I, { kind: 'transmission', index: I.power.transmission.length - 1 });
-  assert.ok(tx.affected.length >= 1, 'a transmission line feeds at least one substation');
+  // a meshed grid: most corridors strand nobody, the worst corridor strands what the N-1 score says, never more than the target
+  const corridorHits = I.power.transmission.map((t, i) => impact(L, I, { kind: 'transmission', index: i }).share);
+  assert.ok(corridorHits.some((x) => x === 0), 'the mesh gives most corridors a backup');
+  close(Math.max(...corridorHits), I.power.n1Transmission, 1e-9, 'worst corridor matches n1Transmission');
+  const plantOut = impact(L, I, { kind: 'plant', index: 0 });
+  assert.ok(plantOut.shortfallMW > 0 && plantOut.affected.length + plantOut.degraded.length === I.laterals.length, 'losing the station leaves the city short');
   const tp = impact(L, I, { kind: 'treatment', index: 0 });
   assert.ok(tp.affected.length === I.sewer.pipes.filter((p) => p.plant === 0 && p.flow > 0).length || tp.affected.length > 0);
   if (I.sewer.liftStations.length) {
@@ -235,8 +270,16 @@ test('resilience: N-1 scores in [0,1], the worst single failure is the max over 
   }
   const town = full({ preset: 'town', frequency: 432 });
   const Rt = resilience(town, town.infra);
-  assert.ok(Rt.water.worstShare >= R.water.worstShare, 'one tank serves the whole town; a city spreads the risk');
+  close(Rt.water.worstShare, 1, 1e-9, 'one tank serves the whole town');
+  close(Rt.power.worstShare, 1, 1e-9, 'one substation serves the whole town');
+  assert.ok(R.water.worstShare > 0.02 && R.water.worstShare < 0.5, `a city tank serves a slice: ${R.water.worstShare}`);
+  assert.ok(R.power.worstShare > 0 && R.power.worstShare <= 0.35, `meshed grid: ${R.power.worstShare}`);
+  assert.ok(R.transit.worstShare > 0.05);
   assert.equal(Rt.transit.worstShare, 0);
+  // the N-1 score agrees with the failure model the Fail button runs
+  const w = R.power.worst;
+  const r = impact(L, L.infra, w);
+  close(r.share, R.power.worstShare, 1e-9, 'tile and Fail button agree');
 });
 
 test('simulation output serialises with the layout and stays deterministic', () => {

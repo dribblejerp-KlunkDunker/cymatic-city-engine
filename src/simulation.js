@@ -143,7 +143,7 @@ export function simulate(layout, opts = {}) {
         if (f > CORE_FLOORS && side < MIN_CORE_SIDE) f = CORE_FLOORS;
         f = Math.min(f, Math.floor((Math.min(hMat, slender * side) + 1e-9) / floorH));
       }
-      return Math.max(1, Math.min(f, Math.max(F, f))); // never above the structural cap, never below one floor
+      return Math.max(1, f); // never below one floor; the caps above keep it within structure
     };
     const gens = [];
     let factor = arc ? 1 : Math.min(1, 0.55 + 0.45 * Math.sqrt(built / years));
@@ -243,7 +243,7 @@ export function flows(layout, infra, hour = 8, opts = {}) {
       const u = stack.pop();
       for (const m of children.get(u) ?? []) {
         const child = m.tree[0];
-        const Q = (m.flow / 3.0) * fw; // m.flow is the peak-hour (3×) design flow (a trunk overlay carries at least that)
+        const Q = ((m.distFlow ?? m.flow) / 3.0) * fw; // distribution peak-hour (3×) design flow
         const hf = hazenWilliams(Q, m.diameter, m.length, C);
         head[child] = head[u] - hf;
         mainsOut.set(m.edge, { edge: m.edge, flow: Q, velocity: Q / (Math.PI * m.diameter * m.diameter / 4), headLoss: hf });
@@ -251,10 +251,13 @@ export function flows(layout, infra, hour = 8, opts = {}) {
       }
     }
   }
-  for (let i = 0; i < N; i++) nodePressure[i] = head[i] > 0 ? 9.81 * g * head[i] : 0;
+  const served = new Uint8Array(N);
+  for (const t of infra.water.towers) served[t.node] = 1;
+  for (const m of infra.water.mains) if (m.tree) served[m.tree[0]] = 1;
+  for (let i = 0; i < N; i++) nodePressure[i] = served[i] ? Math.max(0, 9.81 * g * head[i]) : 0;
   totalFlow = infra.laterals.reduce((s, l) => s + ((l.residents * 300 + l.jobs * 60) / 86400 / 1000) * fw, 0);
   let minPressure = Infinity, lowNodes = 0, criticalNodes = 0;
-  for (let i = 0; i < N; i++) if (nodePressure[i] > 0) { minPressure = Math.min(minPressure, nodePressure[i]); if (nodePressure[i] < 241) lowNodes++; if (nodePressure[i] < 140) criticalNodes++; }
+  for (let i = 0; i < N; i++) if (served[i]) { minPressure = Math.min(minPressure, nodePressure[i]); if (nodePressure[i] < 241) lowNodes++; if (nodePressure[i] < 140) criticalNodes++; }
   const water = { nodePressure, minPressure: Number.isFinite(minPressure) ? minPressure : 0, lowNodes, criticalNodes, totalFlow, mains: [...mainsOut.values()], staticKPa: 9.81 * g * infra.water.towerHeight };
 
   // ---- power: voltage drop along feeders from each substation bus
@@ -451,8 +454,15 @@ export function impact(layout, infra, asset) {
   }
   // ---- power
   if (kind === 'plant') {
-    const a = infra.power.plants.length > 1 ? [] : infra.laterals;
-    return done(a, [], {}, infra.power.plants.length > 1 ? 'Another plant carries the load.' : `Power station out: the whole city goes dark (${Math.round(people(a)).toLocaleString('en-US')} people).`);
+    const pl = infra.power.plants[index];
+    const lost = strandedSubstations(infra, new Set(), new Set([pl.node]));
+    const a = infra.laterals.filter((l) => lost.has(infra.power.nodeFeeder[l.node]));
+    const remaining = infra.power.plants.filter((_, i) => i !== index).reduce((s, p) => s + p.capacityMW, 0);
+    const short = Math.max(0, infra.power.peakMW - remaining);
+    return done(a, short > 0 ? infra.laterals.filter((l) => !lost.has(infra.power.nodeFeeder[l.node])) : [], { shortfallMW: short },
+      infra.power.plants.length > 1
+        ? `${pl.kind[0].toUpperCase()}${pl.kind.slice(1)} out: ${lost.size} substation${lost.size === 1 ? '' : 's'} lose their only source${short > 0 ? `; the rest run ${short.toFixed(0)} MW short at peak (rolling cuts)` : ''}.`
+        : `Power station out: the whole city goes dark (${Math.round(people(a)).toLocaleString('en-US')} people).`);
   }
   if (kind === 'substation') {
     const a = infra.laterals.filter((l) => infra.power.nodeFeeder[l.node] === index);
@@ -491,11 +501,11 @@ export function impact(layout, infra, asset) {
 }
 
 // substations (by index) that lose every path to the plant when the given logical lines fail
-function strandedSubstations(infra, failedLines) {
-  const plant = infra.power.plants[0]?.node;
+function strandedSubstations(infra, failedLines, failedSources = new Set()) {
+  const sources = (infra.power.sources ?? infra.power.plants.map((p) => p.node)).filter((n) => !failedSources.has(n));
   const adjL = new Map(); const link = (x, y) => (adjL.get(x) ?? adjL.set(x, []).get(x)).push(y);
   (infra.power.lines ?? []).forEach((l, i) => { if (failedLines.has(i)) return; link(l.from, l.to); link(l.to, l.from); });
-  const seen = new Set([plant]), st = [plant];
+  const seen = new Set(sources), st = [...sources];
   while (st.length) { const u = st.pop(); for (const v of adjL.get(u) ?? []) if (!seen.has(v)) { seen.add(v); st.push(v); } }
   const lost = new Set(); infra.power.substations.forEach((s, i) => { if (!seen.has(s.node)) lost.add(i); });
   return lost;
@@ -509,15 +519,19 @@ export function resilience(layout, infra) {
   const totalPeople = Math.max(1, infra.laterals.reduce((s, l) => s + l.residents, 0));
   const zonePeople = new Float64Array(infra.power.substations.length);
   for (const l of infra.laterals) { const z = infra.power.nodeFeeder[l.node]; if (z >= 0) zonePeople[z] += l.residents; }
-  // transmission: each logical line fails in turn; connectivity decides which substations go dark
-  const lineShare = (infra.power.lines ?? []).map((_, li) => { let p = 0; for (const z of strandedSubstations(infra, new Set([li]))) p += zonePeople[z]; return p / totalPeople; });
+  // transmission: one dig cuts every line in a corridor; score each distinct corridor once
+  const corridors = new Map();
+  infra.power.transmission.forEach((t, ti) => { const key = (t.lines ?? [t.line]).slice().sort((x, y) => x - y).join(','); if (!corridors.has(key)) corridors.set(key, { lines: t.lines ?? [t.line], index: ti }); });
+  const corridorShare = [...corridors.values()].map((c) => { let p = 0; for (const z of strandedSubstations(infra, new Set(c.lines))) p += zonePeople[z]; return { share: p / totalPeople, kind: 'transmission', index: c.index }; });
   const power = worstOf([
     ...infra.power.substations.map((_, i) => ({ share: zonePeople[i] / totalPeople, kind: 'substation', index: i })),
-    ...lineShare.map((share, li) => ({ share, kind: 'transmission', index: infra.power.transmission.findIndex((t) => t.line === li) })),
+    ...corridorShare,
   ]);
+  const totalAvg = infra.sewer.plants.reduce((s, p) => s + p.flowM3Day, 0) / 86400;
   const sewer = worstOf([
     ...infra.sewer.plants.map((_, i) => ({ share: impact(layout, infra, { kind: 'treatment', index: i }).share, kind: 'treatment', index: i })),
-    ...infra.sewer.liftStations.slice(0, 64).map((_, i) => ({ share: impact(layout, infra, { kind: 'lift', index: i }).share, kind: 'lift', index: i })),
+    // a lift station's exposure is the share of the city's flow passing through it (the sewer tree already aggregated it)
+    ...infra.sewer.liftStations.map((ls, i) => { const pi = infra.sewer.byUp[ls.node]; return { share: pi >= 0 ? infra.sewer.pipes[pi].avgFlow / Math.max(1e-12, totalAvg) : 0, kind: 'lift', index: i }; }),
   ]);
   const cm = metroCatchments(layout, infra);
   const transit = cm ? worstOf(infra.transit.tunnels.map((_, i) => ({ share: Math.min(1, cm.linkDaily[i] / 2 / (cm.daily || 1)), kind: 'transit', index: i }))) : { share: 0, kind: 'none', index: -1 };

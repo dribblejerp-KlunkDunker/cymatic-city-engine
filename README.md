@@ -15,6 +15,7 @@ It runs as a single self-contained web page (`dist/cymatic-city.html`) or as a d
 - [Using the viewer](#using-the-viewer)
 - [How a frequency becomes a city](#how-a-frequency-becomes-a-city)
 - [The underground](#the-underground)
+- [Simulation: time, flow, failure](#simulation-time-flow-failure)
 - [Realism and fantasy](#realism-and-fantasy)
 - [Profiles](#profiles)
 - [Module API](#module-api)
@@ -36,6 +37,7 @@ It runs as a single self-contained web page (`dist/cymatic-city.html`) or as a d
 | **Buildings** | Amplitude sets zoning (core / mixed / residential / green) and height; the wave's sign splits alternating districts; the peak of each district gets a landmark. Every footprint clears every road edge, never overlaps a neighbour, and sits within walking reach of a street. |
 | **Structure** | Height ≤ σ/(ρ·g·3) for the chosen material; slenderness ≤ 1:10 (city) scaled by g^-1/3; buildings over six floors need a 14 m lift core; arcologies are terraced so no exposed face exceeds 1:8; spherical arcologies stay a shell. |
 | **Underground** | Street graph with junctions at every crossing; a service lateral per building; gravity sewers sized by Manning and laid at Ten-State minimum slopes with lift stations and force mains; looped water mains fed from elevated tanks and a treatment plant; a power station, substations, 11 kV feeders and 110 kV transmission; metro stations at district landmarks with tunnels bored below every foundation; utility galleries under arcology boulevards. |
+| **Simulation** | A time axis: the city is founded at the strongest antinode near the drive point and grows outward along its streets on an exponential built-up curve; buildings age on Weibull lifetimes and are rebuilt denser within the same structural limits; every keyframe is a complete city with its networks rebuilt. An hourly flow model: Hazen-Williams pressure along the water mains, three-phase voltage drop along the feeders, Manning partial-flow depth in the sewers, a gravity-model commute on the metro. Failure analysis: fail any asset and see who loses service; N-1 resilience per network. |
 | **Checks** | Street share, street density, open space, residents/ha, tallest vs. material limit, most slender building, walking reach, road clearance, terrace steps, pattern sharpness, sewer slope and depth, water velocity and pressure, substation loading, tunnel clearance. |
 | **Viewer** | Surface / X-ray / Underground views, layer chips, pipe exaggeration, section cut, orbit + WASD/QE fly, full zoom, click-to-inspect anything with a Focus action, themes, custom settlements, profiles, PNG and zip export (OBJ + JSON + profile). |
 
@@ -73,7 +75,9 @@ const json = toJSON(city);    // everything, plain data
 - **Fly**: `W A S D` move, `Q E` down/up, `Shift` fast; drag to orbit, scroll to zoom (down to 2 m). Click anything — a building, a street, a pipe, a cable, a tunnel, a tank, a substation, a station — for its data; **Focus** or double-click to orbit around it; `Esc` clears.
 - **Section cut** slices the whole scene along x, z or a horizontal plane so you can look inside.
 - **Pipe exaggeration** scales diameters for visibility (depths are always true scale).
-- **Save** gives a `.zip` with `city.obj`, `layout.json`, `profile.json` and a README, or a `.png` of the current view.
+- **Simulate growth** runs the time axis (default 120 years, six keyframes); the **Year** slider walks the keyframes and **plan** returns to the generated plan. The **Hour of day** slider with *Colour the networks by load* runs the flow model and recolours every pipe, cable and tunnel by utilisation (blue–gold–red); the tiles below report the lowest pressure, lowest voltage, busiest substation, fullest sewer and busiest metro link.
+- **Fail this** on any inspected asset (tank, plant, main, treatment plant, lift station, sewer, power station, substation, feeder, transmission corridor, tunnel, station) paints the affected buildings red (cut off) and amber (degraded) and explains the impact. The **Resilience (N-1)** tiles show the worst single failure per network with a Show button.
+- **Save** gives a `.zip` with `city.obj`, `layout.json`, `profile.json`, a README and, when present, `simulation.json` and `flows-HHMM.json`, or a `.png` of the current view.
 
 ## How a frequency becomes a city
 
@@ -95,6 +99,18 @@ Everything below runs on a street graph built from the road segments, with junct
 - **Utility galleries.** Arcologies get a 3 × 3 m gallery at 6 m under every boulevard and service corridor, carrying water, power, sewer, data and heat.
 
 Lower gravity steepens the sewers (more lift stations), raises the tanks and relaxes slenderness; heavier gravity does the reverse.
+
+## Simulation: time, flow, failure
+
+**Time.** `simulate(layout, { years, keyframes })` founds the city at the building with the strongest amplitude nearest the drive point and orders settlement by street distance from it, pulled earlier by amplitude. Build years follow built-up growth of 3.7 % a year (the Lincoln Institute figure for fast-growing cities), so the first keyframes are a small town and the last half of the horizon adds most of the city. Each building then ages on a Weibull lifetime by type (shape 1.5; 70–120 year scales for Western stock) and is rebuilt; rebuilds grow toward and beyond the design height where the plate moves most, but never past the material, slenderness or lift-core limits when realism is on. Streets switch on along each new building's path back to the nucleus. Every keyframe is a full layout with its own networks, stats and checks, so anything that reads a layout reads a year of history. The simulated end state is denser than the generated plan; the viewer's **plan** button returns to it.
+
+**Flow.** `flows(layout, infra, hour)` applies hourly profiles (two-peak water, lagged sewage, evening residential and daytime commercial power, AM/PM rail) and runs each network:
+- water: Hazen-Williams head loss (C = 130) along the distribution forest from each tank; pressure per node; flags below 241 kPa (normal minimum) and 140 kPa (fire residual);
+- power: three-phase drop `√3·I·L·(R cos φ + X sin φ)` along feeders with 11 kV aluminium XLPE conductors chosen per cable class (parallel runs above 455 A); voltage per node, loading per cable and substation; flags under 0.95 pu. The hourly factor is normalised so the design peak is the busiest hour;
+- sewers: Manning partial-flow depth from Q/Q_full, so the tightest pipe runs at its 80 % design depth at the sewage peak; force mains are pressurised and exempt;
+- metro: catchments within 1.2 km of each station, a gravity model (P_i·A_j/d) scaled to 35 % of commuters, hourly share from the rail profile, inbound before 13:00 and outbound after, assigned to the unique tunnel-tree path; link loads against 30,000 passengers per hour per direction.
+
+**Failure.** `impact(layout, infra, { kind, index })` removes one asset and reports the buildings cut off and degraded, people and jobs, and a sentence. Water looks for an alternate path through the loop mains from other tanks; sewers walk the tree upstream; power uses connectivity of the logical 110 kV lines to any source; metro reports the share of daily trips that lose their route. `resilience()` scores each network's worst single failure. Because backup lines are only useful if they don't share a trench, the grid is built with a second injection point (a grid intertie on the far side), substation-to-substation backup lines routed away from busy trenches, and N-1 scored per **corridor** (every line in one trench fails together). Dense arcologies with few corridors cannot reach the 20 % target and say so.
 
 ## Realism and fantasy
 
@@ -129,7 +145,7 @@ A profile is the complete recipe for a city: every engine parameter plus the the
 | `enumerateModes`, `drivenResponse`, `frequencyRange`, `drivePoint`, `modeLabel` | The physics layer. |
 | `besselJ`, `besselZeros`, `legendreNormalized`, `realSphericalHarmonic` | Special functions (cross-checked against scipy). |
 | `PRESETS`, `PLATES`, `MATERIALS`, `CUSTOM_FIELDS`, `customPreset`, `resolveMaterial`, `heightLimit`, `slendernessLimit`, `SAFETY_FACTOR`, `CORE_FLOORS`, `MIN_CORE_SIDE` | Rules and constants. |
-| `toJSON(layout)`, `toOBJ(layout)`, `buildingMesh(b)`, `zipStore(files)`, `crc32` | Export. |
+| `toJSON(layout)`, `toOBJ(layout)`, `buildingMesh(b)`, `zipStore(files)`, `crc32`, `checksFor(meta, stats)` | Export and re-checking. |
 | `mulberry32(seed)`, `noteName(hz)` | Utilities. |
 
 `src/infrastructure.js`:
@@ -140,6 +156,16 @@ A profile is the complete recipe for a city: every engine parameter plus the the
 | `buildStreetGraph(layout)` | The street graph alone. |
 | `sewerMinSlope(D, g)`, `foundationDepth(b)`, `underground(layout, P, depth)`, `infraToOBJ` | Rules and helpers. |
 | `SEWER`, `WATER`, `POWER`, `TRANSIT`, `UTILIDOR` | Design constants with their sources in the comments. |
+
+`src/simulation.js`:
+
+| Export | Purpose |
+|---|---|
+| `simulate(layout, { years, keyframes, onKeyframe })` | `{ years, founding, history[{building, built, distance, generations[{year, floors, h}]}], keyframes[{year, layout, infra, stats}], events[] }`. |
+| `flows(layout, infra, hour, { hazenC })` | `{ hour, water{nodePressure[], minPressure, lowNodes, criticalNodes, totalFlow, mains[], staticKPa}, power{nodeVoltage[], minPu, underVoltage, feeders[], substations[], totalMVA, blend}, sewer{pipes[{fullness, surcharged}], surcharged, maxFullness}, transit{links[{loadAB, loadBA, capacity, loadFactor}], stations[], dailyTrips, hourTrips, maxLoadFactor}, flags[] }`. |
+| `impact(layout, infra, { kind, index })` | `{ affected[], degraded[], people, degradedPeople, jobs, share, summary, … }` for tower, waterplant, water, treatment, lift, sewer, plant, substation, power, transmission, transit, station. |
+| `resilience(layout, infra)` | `{ water, power, sewer, transit }` each `{ worstShare, worst{kind, index}, score }`. |
+| `PROFILES`, `PEAK_HOUR`, `GROWTH`, `LIFETIMES`, `POWER_FLOW`, `hazenWilliams`, `voltageDrop`, `partialFlowDepth`, `cableFor`, `cityStats` | Constants and formulas. |
 
 ## Data contract
 
@@ -160,8 +186,9 @@ layout
    ├─ laterals[] { building, node, length, residents, jobs }
    ├─ sewer     { plants[], pipes[{up, down, edge, length, diameter, slope, upDepth, downDepth, flow, avgFlow, lift, forceMain, plant}],
    │             liftStations[], manholes[], nodeDepth[] }
-   ├─ water     { towers[{node, pos, height, pumped, storageM3, served, demandM3Day}], plant, mains[{a, b, diameter, flow, velocity, depth, kind, zone}], nodeHead[] }
-   ├─ power     { plants[], substations[{node, pos, ratingMVA, banks, loadMVA}], feeders[{a, b, loadMVA, classMVA, depth, kV, substation}], transmission[], peakMW }
+   ├─ water     { towers[{node, pos, height, pumped, storageM3, served, demandM3Day}], plant, mains[{a, b, tree[child, parent]?, diameter, flow, distFlow, velocity, depth, kind, zone}], nodeHead[] }
+   ├─ power     { plants[{kind, capacityMW}], sources[], substations[{node, pos, ratingMVA, banks, loadMVA}], feeders[{a, b, loadMVA, classMVA, depth, kV, substation}],
+   │             transmission[{a, b, edge, line, lines[], n1}], lines[{from, to, edges[], length}], n1Transmission, peakMW }
    ├─ transit   { stations[{node, pos, depth, district, name}], tunnels[{a, b, length, line, depth, diameter, nearBuildings[]}], depth }
    ├─ utilidors[] { a, b, length, width, height, depth, carries[] }
    ├─ stats     sewerKm, liftStations, forceMains, waterKm, towers, towerHeight, powerKm, substations, peakMW, transitKm, stations, excavationM3, …
@@ -182,16 +209,16 @@ The engine was built to be one stage in a larger pipeline:
 
 ## Verification
 
-- `npm test` runs 56 tests in about three minutes: Bessel values and zeros against scipy, spherical-harmonic orthonormality, mode norms by numerical integration, the square-plate corner convention, drive-point coupling, analytic nodal sets for boulevards, brute-force road-clearance and overlap checks on sampled cities, structural limits across every plate × preset, gravity scaling, OBJ winding and index validity, zip validity (checked with Python's `zipfile`), determinism, input validation; and for the underground, sewer slope/depth/flow conservation, force mains, looped mains and trunk flows, substation ratings and feeder accumulation, junctions at every crossing, brute-force tunnel-clearance over every building, connector lengths, and timing.
+- `npm test` runs 74 tests in about three minutes: Bessel values and zeros against scipy, spherical-harmonic orthonormality, mode norms by numerical integration, the square-plate corner convention, drive-point coupling, analytic nodal sets for boulevards, brute-force road-clearance and overlap checks on sampled cities, structural limits across every plate × preset, gravity scaling, OBJ winding and index validity, zip validity (checked with Python's `zipfile`), determinism, input validation; and for the underground, sewer slope/depth/flow conservation, force mains, looped mains and trunk flows, substation ratings and feeder accumulation, junctions at every crossing, brute-force tunnel-clearance over every building, connector lengths, and timing; and for the simulation, profile means and shapes, Hazen-Williams and voltage-drop hand-worked cases, strict head and voltage loss along every loaded main and feeder, Manning partial flow at the design peak, metro conservation and AM/PM reversal link by link, growth determinism and nesting, structural caps through densification, keyframe stats recomputed, impact sets, and agreement between the N-1 tiles and the failure model.
 - The page is rendered headless (Playwright + Chromium) at desktop and phone widths through every view mode, with picking, fly controls and the section cut exercised.
-- Two independent review passes (one on the city layer, one on the underground) each found real defects that were then fixed and re-verified: the square-plate coordinate convention, modal normalisation, inverted OBJ winding, tunnels missing foundations on long edges, streets crossing without junctions, undersized trunk mains.
+- Three independent review passes (city layer, underground, simulation) each found real defects that were then fixed and re-verified: the square-plate coordinate convention, modal normalisation, inverted OBJ winding, tunnels missing foundations on long edges, streets crossing without junctions, undersized trunk mains, backup power lines sharing trenches with the lines they backed up.
 
 ## Limits and honesty
 
 - The standing-wave patterns are real physics; turning them into a city is a design choice. No evidence shows that 432 Hz, Solfeggio tones or the Schumann resonance make a place healthier or more harmonious, so the engine treats every frequency alike.
 - Between two modes the plate never fully stands still; the viewer shows the pattern's sharpness and the boulevards follow the dominant standing pattern.
 - The sphere is an idealised scalar model, not a thin elastic shell.
-- Water pressure is static head only; electrical loads are per-capita averages; metro ridership is not modelled. Arcology service corridors run through the structure rather than under streets, by design.
+- Water pressure is static head minus tree losses (loops carry no modelled flow); power flow is a radial voltage-drop model, not a full load flow; metro ridership is a gravity model on a tree; growth is a settlement-order model, not an economic one. Arcology service corridors run through the structure rather than under streets, by design.
 - Preset street widths, lot sizes and several planning thresholds are tunables chosen within the ranges in the research notes; the notes mark which numbers are sourced and which are not.
 
 ## Project layout
@@ -199,6 +226,7 @@ The engine was built to be one stage in a larger pipeline:
 ```
 src/cymatic-engine.js     physics, plan, buildings, structure, export
 src/infrastructure.js     street graph and every underground network
+src/simulation.js         time axis, hourly flows, failure analysis
 src/viewer.html           the 3D page (three.js from a CDN, everything else inline)
 build.mjs                 inlines the modules into dist/
 test/                     physics, city, export and infrastructure suites
