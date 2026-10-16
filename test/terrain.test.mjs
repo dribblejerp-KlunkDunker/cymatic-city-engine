@@ -29,6 +29,13 @@ test('terrain spec resolves: flat by default, modes validated, heightmaps need a
   assert.throws(() => resolveTerrain({ mode: 'relief', relief: 'tall' }), /Relief/);
   assert.equal(resolveTerrain({ mode: 'relief', relief: 5000 }).relief, 2000, 'relief clamps');
   assert.equal(resolveTerrain({ mode: 'relief', relief: 'auto' }).relief, 'auto');
+  // a tiny or zero explicit relief is harmless: nothing floods, the city is the flat one lifted by nothing
+  for (const relief of [0, 0.5, 1]) {
+    const L = generateCity({ plate: 'circle', preset: 'town', frequency: 300, terrain: { mode: 'relief', relief } });
+    const flat = generateCity({ plate: 'circle', preset: 'town', frequency: 300 });
+    assert.ok(L.buildings.length >= 0.85 * flat.buildings.length, `relief ${relief}: ${L.buildings.length} of ${flat.buildings.length} buildings`);
+    assert.ok(L.stats.terrain.shore <= Math.max(0.25 * relief, 0) + 1e-9 || L.stats.terrain.shore <= 0.5);
+  }
 });
 
 test('flat terrain reproduces the 1.1 layout exactly', () => {
@@ -120,7 +127,7 @@ test('buildings stand on the ground, streets follow it, and nothing is built on 
       assert.ok(Math.abs(elevOf(L, b.pos) - z) < 1e-6, `${plate}/${preset}: building sits on the ground (${elevOf(L, b.pos)} vs ${z})`);
       assert.ok(Math.abs(b.elevation - z) < 1e-6, 'elevation field matches the ground');
       assert.ok(z >= T.waterLevel + T.shore - 1e-9, `${plate}/${preset}: no building on the shore (z ${z}, water ${T.waterLevel}, shore ${T.shore})`);
-      assert.ok(z >= T.waterLevel + 0.5 - 1e-9, 'the freeboard is never under half a metre');
+      assert.ok(z >= T.waterLevel + Math.min(0.5, 0.25 * T.relief) - 1e-9, 'the freeboard is never under half a metre (a quarter of a tiny relief)');
     }
     // streets: on the ground, or embanked to the freeboard where the ground is within it; one height per plan point
     const byPlan = new Map();
@@ -138,7 +145,7 @@ test('buildings stand on the ground, streets follow it, and nothing is built on 
     const t = L.stats.terrain;
     assert.equal(t.mode, mode);
     assert.ok(Math.abs(t.maxGrade - maxGrade) < 0.02, `${plate}/${preset}: reported grade ${t.maxGrade} vs recomputed ${maxGrade}`);
-    assert.ok(t.shore >= 0.5 && t.shore <= 3);
+    assert.ok(t.shore >= Math.min(0.5, 0.25 * t.relief) - 1e-9 && t.shore <= 3);
     assert.ok(t.waterShare >= 0 && t.waterShare < 0.5, `${plate}/${preset}: water share ${t.waterShare}`);
     assert.ok(t.maxGrade <= 0.15, `${plate}/${preset}: steepest street ${(100 * t.maxGrade).toFixed(1)} %`);
     if (t.waterShare > 0.01) assert.ok(t.bridges > 0 && t.bridgeLength > 0, `${plate}/${preset}: water is crossed by bridges`);
@@ -209,9 +216,11 @@ test('the street graph on terrain: nodes carry elevations, junctions still form,
 });
 
 test('sewers fall on the heightfield: every gravity run drops at least the minimum slope between true inverts', () => {
-  for (const [plate, preset] of [['circle', 'city'], ['square', 'town'], ['sphere', 'alien']]) {
+  let multiPlant = 0;
+  for (const [plate, preset] of [['circle', 'city'], ['square', 'town'], ['sphere', 'alien'], ['square', 'megastructure']]) {
     const L = full({ plate, preset, frequency: plate === 'sphere' ? 300 : 432, terrain: 'relief' });
     const I = L.infra, g = L.meta.gravity, el = (i) => I.graph.nodes[i].elev;
+    if (I.sewer.plants.length > 1) multiPlant++;
     let gravity = 0;
     for (const p of I.sewer.pipes) {
       assert.ok(p.upDepth >= SEWER.minCover - 1e-9 && p.downDepth >= SEWER.minCover - 1e-9, 'cover kept');
@@ -233,6 +242,7 @@ test('sewers fall on the heightfield: every gravity run drops at least the minim
       if (I.sewer.plants.length === 1) assert.ok(Math.abs(el(I.sewer.plants[0].node) - perim[0]) < 1e-9, `${plate}/${preset}: the only plant sits at the lowest perimeter point`);
     }
   }
+  assert.ok(multiPlant > 0, 'at least one configuration has several plants, so the low-ground site filter is exercised');
 });
 
 test('terrain costs lift stations where the ground climbs, and downhill routing keeps that cost bounded', () => {

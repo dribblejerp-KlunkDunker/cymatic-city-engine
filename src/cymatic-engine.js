@@ -858,11 +858,11 @@ function liftTo(dom, P, zv) {
   if (dom.kind === 'plane') return [P[0], zv, P[2]];
   const k = (dom.Rs + zv) / len3(P); return [P[0] * k, P[1] * k, P[2] * k];
 }
-// Steepest slope (per metre) of a normalised height function over the plate, from every fourth grid point.
+// Steepest slope (per metre) of a normalised height function over the plate, from every second grid point.
 export function maxFieldSlope(dom, zNorm, grid) {
   let m = 0;
   const h = 1e-3;
-  for (let i = 0; i <= grid.ni; i += 4) for (let j = 0; j <= grid.nj; j += 4) {
+  for (let i = 0; i <= grid.ni; i += 2) for (let j = 0; j <= grid.nj; j += 2) {
     if (!grid.valid[i * grid.W + j]) continue;
     const [u, v] = grid.coord(i, j);
     let gu, gv;
@@ -923,8 +923,9 @@ export function makeTerrain(p, field, dom, nodalSpacing, grid = null) {
   const waterLevel = t.waterLevel !== 'auto' ? t.waterLevel
     : t.mode === 'relief' ? -0.5 * relief : t.mode === 'valleys' ? (t.canals ? relief * (2 * canalAmplitude(field, grid) - 1) : -Infinity) : -0.6 * relief;
   // freeboard: shore streets are embanked to this height above the water and bridges deck at it;
-  // no building stands below it either (half a metre on a gentle relief, up to three metres)
-  const shore = clamp(0.15 * relief, 0.5, 3);
+  // no building stands below it either (half a metre on a gentle relief, up to three metres; a near-flat relief
+  // keeps the freeboard a fraction of itself so the shore band cannot swallow the whole plate)
+  const shore = clamp(0.15 * relief, Math.min(0.5, 0.25 * relief), 3);
   const lift = dom.kind === 'plane'
     ? (P) => { const [u, v] = dom.toNorm(P); return [P[0], z(u, v), P[2]]; }
     : (P) => { const [u, v] = dom.toNorm(P); const k = (dom.Rs + z(u, v)) / len3(P); return [P[0] * k, P[1] * k, P[2] * k]; }; // exactly Rs + z from the centre
