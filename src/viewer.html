@@ -237,6 +237,28 @@ textarea { font: 400 var(--step--1)/1.3 var(--mono); resize: vertical; }
           <span>Build on the sand lines instead of the antinodes (tallest buildings line the boulevards, lobe centres become plazas)</span></label>
       </section>
 
+      <section>
+        <h2>Terrain</h2>
+        <div class="seg" role="group" aria-label="Terrain" id="terrain-seg">
+          <button data-v="flat">Flat</button><button data-v="relief">Relief</button><button data-v="valleys">Valleys</button><button data-v="heightmap">Heightmap</button>
+        </div>
+        <div class="pair" id="terrain-fields">
+          <label class="field" for="relief">Relief (m)
+            <input type="number" id="relief" min="0" max="2000" step="1" placeholder="auto">
+          </label>
+          <label class="field" for="water-level">Water level (m)
+            <input type="number" id="water-level" step="0.5" placeholder="auto">
+          </label>
+        </div>
+        <label class="check" for="canals" id="canals-row"><input type="checkbox" id="canals"><span>Flood the valleys into canals</span></label>
+        <div class="inline" id="heightmap-row">
+          <button id="heightmap-load" type="button">Load heightmap PNG</button>
+          <input type="file" id="heightmap-file" accept="image/png,image/jpeg,image/webp" hidden>
+          <span class="hint" id="heightmap-name">none loaded</span>
+        </div>
+        <p class="hint" id="terrain-hint">Relief lets the standing wave be the ground: antinodes rise, troughs sink and flood. Valleys make every lobe a hill with the sand lines as valleys. A heightmap (grey PNG, white high) stands in for a terrain from another engine. Sewers, tanks and bridges follow whatever the ground does.</p>
+      </section>
+
       <section id="custom-section" hidden>
         <h2>Custom settlement</h2>
         <div class="pair">
@@ -397,7 +419,9 @@ import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/exampl
 const $ = (id) => document.getElementById(id);
 const DEFAULTS = { frequency: 432, plate: "circle", preset: "city", seed: 1, Q: 100, inverse: false,
   gravity: null, material: null, fundamentalHz: null, driveOffset: null, azimuthal: null,
-  enforce: true, theme: "realistic", custom: { base: "city" }, customMaterial: null };
+  enforce: true, theme: "realistic", custom: { base: "city" }, customMaterial: null,
+  terrain: { mode: "flat", relief: null, waterLevel: null, canals: false } };
+let heightmapData = null; // { width, height, data: Float32Array, name } — kept in memory, not in the profile
 let params = { ...DEFAULTS };
 try { const s = JSON.parse(localStorage.getItem("cymatic-city-params-v2") || "null"); if (s) params = { ...DEFAULTS, ...s }; } catch {}
 const remember = () => { try { localStorage.setItem("cymatic-city-params-v2", JSON.stringify(params)); } catch {} };
@@ -412,10 +436,25 @@ const engineParams = () => {
   if (params.preset === "custom") o.custom = { ...params.custom };
   if (params.customMaterial) o.material = params.customMaterial;
   o.enforce = params.enforce !== false;
+  o.terrain = terrainSpec();
   return o;
 };
+function terrainSpec() {
+  const t = params.terrain ?? DEFAULTS.terrain;
+  if (!t || t.mode === "flat") return "flat";
+  const o = { mode: t.mode, canals: !!t.canals };
+  if (t.relief != null) o.relief = t.relief;
+  if (t.waterLevel != null) o.waterLevel = t.waterLevel;
+  if (t.mode === "heightmap") {
+    if (!heightmapData) return "flat"; // nothing loaded yet: build flat and say so
+    o.heightmap = { width: heightmapData.width, height: heightmapData.height, data: heightmapData.data };
+  }
+  return o;
+}
+// the field preview needs the heightmap grid, which the layout's meta does not carry
+const previewTerrain = (mt) => (mt && mt.mode === "heightmap" ? (heightmapData ? { ...mt, heightmap: { width: heightmapData.width, height: heightmapData.height, data: heightmapData.data } } : "flat") : (mt ?? "flat"));
 // a profile is everything needed to reproduce a city, plus the theme
-const profileOf = () => ({ engine: ENGINE_VERSION, ...engineParams(), theme: params.theme });
+const profileOf = () => { const p = { engine: ENGINE_VERSION, ...engineParams(), theme: params.theme }; if (p.terrain?.heightmap) p.terrain = { ...p.terrain, heightmap: { width: p.terrain.heightmap.width, height: p.terrain.heightmap.height, note: "grid not included; load the PNG again" } }; return p; };
 function applyProfile(p) {
   if (!p || typeof p !== "object") throw new Error("Not a profile");
   const n = { ...DEFAULTS, custom: { base: "city" } };
@@ -426,6 +465,10 @@ function applyProfile(p) {
   if (!PLATES[n.plate]) throw new Error(`Unknown plate ${n.plate}`);
   if (n.preset !== "custom" && !PRESETS[n.preset]) throw new Error(`Unknown preset ${n.preset}`);
   if (!THEMES[n.theme]) n.theme = "realistic";
+  if (p.terrain) {
+    const t = typeof p.terrain === "string" ? { mode: p.terrain } : p.terrain;
+    n.terrain = { mode: TERRAIN_MODES.includes(t.mode) ? t.mode : "flat", relief: Number.isFinite(+t.relief) && t.relief !== "auto" && t.relief != null ? +t.relief : null, waterLevel: Number.isFinite(+t.waterLevel) && t.waterLevel !== "auto" && t.waterLevel != null ? +t.waterLevel : null, canals: !!t.canals };
+  }
   params = n; applyTheme(); regenerate(0);
 }
 
@@ -668,7 +711,8 @@ function show(L) {
   // paint the plate from the settings this city was built with, not whatever the sliders say now
   const m0 = L.meta;
   const F = fieldPreview({ frequency: m0.frequency, plate: m0.plate, preset: m0.preset, Q: m0.Q, fundamentalHz: m0.fundamentalHz,
-    driveOffset: m0.driveOffset, azimuthal: m0.azimuthal, gravity: m0.gravity, material: m0.material });
+    driveOffset: m0.driveOffset, azimuthal: m0.azimuthal, gravity: m0.gravity, material: m0.material, terrain: previewTerrain(m0.terrain) });
+  const T = F.terrain, hilly = T.mode !== "flat", waterLevel = Number.isFinite(T.waterLevel) ? T.waterLevel : -Infinity;
   disposeWorld();
   const style = L.meta.presetSpec?.style ?? PRESETS[L.meta.preset]?.style ?? "city";
   const pal = { ...PALETTES[style], ...(THEMES[params.theme]?.palette ?? {}) };
@@ -676,11 +720,13 @@ function show(L) {
 
   // ground: the plate itself, sand-lit where it stands still
   let groundGeo;
-  if (sphere) groundGeo = new THREE.SphereGeometry(F.Rs - 0.8, 256, 128);
-  else if (F.shape === "circle") groundGeo = new THREE.RingGeometry(0.001, F.extent * 1.025, 256, 110).rotateX(-Math.PI / 2);
-  else groundGeo = new THREE.PlaneGeometry(F.extent * 2.05, F.extent * 2.05, 220, 220).rotateX(-Math.PI / 2);
+  const seg = hilly ? 1.6 : 1; // finer mesh when there is relief to show
+  if (sphere) groundGeo = new THREE.SphereGeometry(F.Rs - 0.8, Math.round(256 * seg), Math.round(128 * seg));
+  else if (F.shape === "circle") groundGeo = new THREE.RingGeometry(0.001, F.extent * 1.025, Math.round(256 * seg), Math.round(110 * seg)).rotateX(-Math.PI / 2);
+  else groundGeo = new THREE.PlaneGeometry(F.extent * 2.05, F.extent * 2.05, Math.round(220 * seg), Math.round(220 * seg)).rotateX(-Math.PI / 2);
   const gp = groundGeo.attributes.position, gcol = new Float32Array(gp.count * 3);
   const plateC = new THREE.Color("#2a2a24"), posC = new THREE.Color("#3a2c22"), negC = new THREE.Color("#1f2d33"), sandC = new THREE.Color("#c9b98f"), rimC = new THREE.Color("#5a4a2c");
+  const shoreC = new THREE.Color("#8a7a55"), bedC = new THREE.Color("#2b3a3c"), hillC = new THREE.Color("#4a4636");
   const tmp = new THREE.Color();
   for (let i = 0; i < gp.count; i++) {
     const P = [gp.getX(i), sphere ? gp.getY(i) : 0, gp.getZ(i)];
@@ -689,14 +735,35 @@ function show(L) {
     else {
       const { S, A } = F.at(u, v);
       tmp.copy(plateC).lerp(S >= 0 ? posC : negC, Math.min(1, A * 1.3)).lerp(sandC, Math.exp(-((A / 0.07) ** 2)) * 0.8);
+      if (hilly) {
+        const z = T.z(u, v);
+        // displace the vertex onto the ground; the plate rim outside the city keeps its level
+        if (sphere) { const k = (F.Rs - 0.8 + z) / Math.hypot(P[0], P[1], P[2]); gp.setXYZ(i, P[0] * k, P[1] * k, P[2] * k); }
+        else gp.setY(i, z);
+        const h = z / Math.max(1e-6, T.relief);
+        if (h > 0) tmp.lerp(hillC, 0.5 * h);
+        if (z < waterLevel) tmp.lerp(bedC, 0.8); else if (z < waterLevel + Math.max(1, 0.1 * T.relief)) tmp.lerp(shoreC, 0.6);
+      }
     }
     gcol.set([tmp.r, tmp.g, tmp.b], i * 3);
   }
+  if (hilly) { gp.needsUpdate = true; groundGeo.computeVertexNormals(); }
   groundGeo.setAttribute("color", new THREE.BufferAttribute(gcol, 3));
-  const ground = new THREE.Mesh(groundGeo, mkMat({ vertexColors: true, roughness: 0.95, metalness: 0.05, side: THREE.DoubleSide }));
+  const ground = new THREE.Mesh(groundGeo, mkMat({ vertexColors: true, roughness: 0.95, metalness: 0.05, side: THREE.DoubleSide, flatShading: hilly }));
   if (!sphere) ground.position.y = -0.4;
   ground.userData.kind = "ground";
   world.add(ground); layerMeshes.ground = [ground];
+  // water: a still surface at the water level, only where the ground is below it (the mesh shows through elsewhere)
+  if (hilly && Number.isFinite(waterLevel)) {
+    let wg;
+    if (sphere) wg = new THREE.SphereGeometry(F.Rs + waterLevel, 192, 96);
+    else if (F.shape === "circle") wg = new THREE.CircleGeometry(F.extent * 1.001, 192).rotateX(-Math.PI / 2);
+    else wg = new THREE.PlaneGeometry(F.extent * 2.001, F.extent * 2.001).rotateX(-Math.PI / 2);
+    const water = new THREE.Mesh(wg, mkMat({ color: "#2f6f86", transparent: true, opacity: 0.72, roughness: 0.15, metalness: 0.3, depthWrite: false }));
+    if (!sphere) water.position.y = waterLevel;
+    water.userData.kind = "water-surface";
+    world.add(water); layerMeshes.ground.push(water);
+  }
   sphereWorld = sphere;
 
   // roads
@@ -711,11 +778,31 @@ function show(L) {
     // keep dir tangent so the basis stays orthogonal on the sphere
     const k = dir[0] * up[0] + dir[1] * up[1] + dir[2] * up[2];
     dir = norm3([dir[0] - k * up[0], dir[1] - k * up[1], dir[2] - k * up[2]]);
-    basisMatrix(m4, mid, up, dir, len + r.w * 0.35, 0.6, r.w, -0.2);
+    basisMatrix(m4, mid, up, dir, len + r.w * 0.35, r.bridge ? 1.6 : 0.6, r.w, r.bridge ? -1.2 : -0.2);
     roads.setMatrixAt(i, m4);
     roads.setColorAt(i, tmp.set(ROAD[r.kind] ?? "#999"));
+    if (r.bridge) tmp.lerp(new THREE.Color("#d7d2c4"), 0.5), roads.setColorAt(i, tmp);
   });
   world.add(roads); pickTargets.push(roads); layerMeshes.roads = [roads];
+  // bridge piers: one under the middle of each bridge span, from the bed up to the deck
+  const spans = L.roads.filter((r) => r.bridge);
+  if (spans.length && hilly) {
+    const piers = new THREE.InstancedMesh(unitBox, mkMat({ color: "#b9b2a2", roughness: 0.9 }), spans.length);
+    spans.forEach((r, i) => {
+      const mid = [(r.a[0] + r.b[0]) / 2, (r.a[1] + r.b[1]) / 2, (r.a[2] + r.b[2]) / 2];
+      const up = sphere ? norm3(mid) : [0, 1, 0];
+      const [u, v] = F.toNorm(mid);
+      const bed = T.z(u, v), deck = sphere ? Math.hypot(...mid) - F.Rs : mid[1];
+      const h = Math.max(0.5, deck - bed + 0.5);
+      const foot = sphere ? norm3(mid).map((c) => c * (F.Rs + bed - 0.5)) : [mid[0], bed - 0.5, mid[2]];
+      const dx = r.b[0] - r.a[0], dy = r.b[1] - r.a[1], dz = r.b[2] - r.a[2], len = Math.hypot(dx, dy, dz) || 1e-6;
+      let dir = [dx / len, dy / len, dz / len]; const k = dir[0] * up[0] + dir[1] * up[1] + dir[2] * up[2];
+      dir = norm3([dir[0] - k * up[0], dir[1] - k * up[1], dir[2] - k * up[2]]);
+      basisMatrix(m4, foot, up, dir, Math.max(1.2, r.w * 0.25), h, Math.max(1.2, r.w * 0.7), 0);
+      piers.setMatrixAt(i, m4);
+    });
+    world.add(piers); layerMeshes.roads.push(piers);
+  }
 
   // buildings, grouped by shape
   layerMeshes.buildings = [];
@@ -952,6 +1039,7 @@ function updatePanel(L) {
     ["Buildings", fmtInt(s.buildings)], ["Districts", s.districts],
     ["Tallest", `${Math.round(s.maxHeight)} m`], ["Floor area ratio", s.far.toFixed(2)],
     ["Streets", `${s.roadLengthKm.toFixed(0)} km`], ["Land area", `${s.areaKm2.toFixed(1)} km²`],
+    ...(s.terrain && s.terrain.mode !== "flat" ? [["Relief", `±${s.terrain.relief.toFixed(0)} m · ${(100 * s.terrain.maxGrade).toFixed(0)} % max grade`], ["Water", `${(100 * s.terrain.waterShare).toFixed(0)} % · ${(s.terrain.bridgeLength / 1000).toFixed(1)} km bridges`]] : []),
   ];
   $("stats").replaceChildren(...stats.map(([k, v]) => { const d = document.createElement("div"); d.className = "stat"; const a = document.createElement("span"); a.textContent = k; const b = document.createElement("b"); b.textContent = v; d.append(a, b); return d; }));
 
@@ -972,7 +1060,7 @@ function updatePanel(L) {
     const u = I.stats;
     const istats = [
       ["Sewers", `${u.sewerKm.toFixed(0)} km`], ["Lift stations", u.liftStations],
-      ["Water mains", `${u.waterKm.toFixed(0)} km`], ["Water tanks", `${u.towers} × ${u.towerHeight.toFixed(0)} m`],
+      ["Water mains", `${u.waterKm.toFixed(0)} km`], ["Water tanks", u.prvs ? `${u.towers} zones · ${u.prvs} PRVs` : `${u.towers} × ${u.towerHeight.toFixed(0)} m`],
       ["Peak power", `${u.peakMW.toFixed(0)} MW`], ["Substations", u.substations],
       ["Metro", u.stations ? `${u.transitKm.toFixed(1)} km · ${u.stations} st.` : "none"], ["Excavation", `${(u.excavationM3 / 1e6).toFixed(2)} M m³`],
     ];
@@ -1005,6 +1093,13 @@ function syncControls() {
   for (const b2 of $("preset-seg").children) b2.setAttribute("aria-pressed", b2.dataset.v === params.preset);
   for (const b2 of $("plate-seg").children) b2.setAttribute("aria-pressed", b2.dataset.v === params.plate);
   $("seed").value = params.seed; $("q").value = params.Q; $("inverse").checked = params.inverse;
+  const t = params.terrain ?? DEFAULTS.terrain;
+  for (const b2 of $("terrain-seg").children) b2.setAttribute("aria-pressed", b2.dataset.v === t.mode);
+  $("terrain-fields").hidden = t.mode === "flat"; $("canals-row").hidden = t.mode !== "valleys"; $("heightmap-row").hidden = t.mode !== "heightmap";
+  if (document.activeElement !== $("relief")) $("relief").value = t.relief ?? "";
+  if (document.activeElement !== $("water-level")) $("water-level").value = t.waterLevel ?? "";
+  $("canals").checked = !!t.canals;
+  $("heightmap-name").textContent = heightmapData ? `${heightmapData.name} · ${heightmapData.width}×${heightmapData.height}` : (t.mode === "heightmap" ? "none loaded — building flat until one is" : "none loaded");
   const pr = params.preset === "custom" ? customPreset(params.custom) : PRESETS[params.preset];
   $("custom-section").hidden = params.preset !== "custom";
   if (params.preset === "custom") {
@@ -1072,6 +1167,32 @@ $("seed").addEventListener("change", (e) => { params.seed = Math.max(0, parseInt
 $("reroll").addEventListener("click", () => { params.seed = Math.floor(Math.random() * 1e6); regenerate(0); });
 $("q").addEventListener("change", (e) => { params.Q = numOrNull(e.target, 2, 1000) ?? 100; regenerate(0); });
 $("inverse").addEventListener("change", (e) => { params.inverse = e.target.checked; regenerate(0); });
+const setTerrain = (patch) => { params.terrain = { ...(params.terrain ?? DEFAULTS.terrain), ...patch }; regenerate(0); };
+for (const b of $("terrain-seg").children) b.addEventListener("click", () => setTerrain({ mode: b.dataset.v }));
+$("relief").addEventListener("change", (e) => setTerrain({ relief: numOrNull(e.target, 0, 2000) }));
+$("water-level").addEventListener("change", (e) => setTerrain({ waterLevel: e.target.value === "" ? null : +e.target.value }));
+$("canals").addEventListener("change", (e) => setTerrain({ canals: e.target.checked }));
+$("heightmap-load").addEventListener("click", () => $("heightmap-file").click());
+$("heightmap-file").addEventListener("change", async (e) => {
+  const f = e.target.files?.[0]; if (!f) return;
+  try {
+    heightmapData = await readHeightmap(f);
+    setTerrain({ mode: "heightmap" });
+  } catch (err) { $("heightmap-name").textContent = `could not read: ${err.message}`; }
+  e.target.value = "";
+});
+// a grey image becomes a 0..1 grid: luminance, white high; downsampled to at most 256 px a side
+async function readHeightmap(file) {
+  const bmp = await createImageBitmap(file);
+  const k = Math.max(1, Math.ceil(Math.max(bmp.width, bmp.height) / 256));
+  const W = Math.max(2, Math.floor(bmp.width / k)), H = Math.max(2, Math.floor(bmp.height / k));
+  const cv = document.createElement("canvas"); cv.width = W; cv.height = H;
+  const cx = cv.getContext("2d", { willReadFrequently: true }); cx.drawImage(bmp, 0, 0, W, H);
+  const px = cx.getImageData(0, 0, W, H).data, data = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) data[i] = (0.2126 * px[4 * i] + 0.7152 * px[4 * i + 1] + 0.0722 * px[4 * i + 2]) / 255;
+  bmp.close?.();
+  return { width: W, height: H, data, name: file.name };
+}
 $("gravity").addEventListener("change", (e) => { params.gravity = numOrNull(e.target, 0.05, 5); regenerate(0); });
 $("material").addEventListener("change", (e) => { params.material = e.target.value || null; if (params.material) params.customMaterial = null; regenerate(0); });
 $("fund").addEventListener("change", (e) => { params.fundamentalHz = numOrNull(e.target, 1, 2000); regenerate(0); });
@@ -1095,11 +1216,16 @@ function describe(kind, r, L) {
       const lat = L.infra?.laterals.find((l) => L.buildings[l.building] === r);
       return { title: `${r.landmark ? "Landmark · " : ""}${zone}`, color: "#e4d3b4", pos: r.pos, size: Math.max(r.w, r.d, r.h), rows: [
         ["Height", `${fmt(r.h, 0)} m`], ["Floors", r.floors], ["Footprint", `${fmt(r.w, 0)} × ${fmt(r.d, 0)} m`], ["Slenderness", `1:${fmt(r.h / Math.min(r.w, r.d))}`],
-        ["Foundations", `${fmt(foundationDepth(r))} m deep`], ["Amplitude", fmt(r.amp, 2)], ["Phase", r.polarity > 0 ? "+" : "−"],
+        ["Foundations", `${fmt(foundationDepth(r))} m deep`], ...(r.elevation != null ? [["Ground", `${fmt(r.elevation)} m`]] : []), ["Amplitude", fmt(r.amp, 2)], ["Phase", r.polarity > 0 ? "+" : "−"],
         ...(lat ? [["Residents", Math.round(lat.residents)], ["Jobs", Math.round(lat.jobs)], ["Service line", `${fmt(lat.length, 0)} m to street node ${lat.node}`]] : []),
       ] };
     }
-    case "road": return { title: `${r.kind[0].toUpperCase()}${r.kind.slice(1)} street`, color: ROAD[r.kind], pos: r.a, size: r.w * 4, rows: [["Width", `${fmt(r.w)} m`], ["Segment", `${fmt(dist3(r.a, r.b))} m`]] };
+    case "road": {
+      const planLen = L.meta.plate === "sphere" ? dist3(r.a, r.b) : Math.hypot(r.b[0] - r.a[0], r.b[2] - r.a[2]);
+      const rise = L.meta.plate === "sphere" ? Math.hypot(...r.b) - Math.hypot(...r.a) : r.b[1] - r.a[1];
+      const grade = planLen > 0 && L.meta.terrain?.mode !== "flat" ? [["Grade", `${fmt(100 * Math.abs(rise) / planLen, 1)} %`]] : [];
+      return { title: `${r.bridge ? "Bridge · " : ""}${r.kind[0].toUpperCase()}${r.kind.slice(1)} street`, color: ROAD[r.kind], pos: r.a, size: r.w * 4, rows: [["Width", `${fmt(r.w)} m`], ["Segment", `${fmt(dist3(r.a, r.b))} m`], ...grade, ...(r.bridge ? [["Deck", `${fmt(L.meta.terrain.waterLevel + L.meta.terrain.freeboard)} m, ${fmt(L.meta.terrain.freeboard)} m above the water`]] : [])] };
+    }
     case "sewer": return { title: r.forceMain ? `${themeName("sewer", "Sewer")} · force main (pumped)` : themeName("sewer", "Gravity sewer"), color: NET.sewer.color, pos: nodes[r.up].pos, depth: r.upDepth, size: 20, rows: [
       ["Diameter", `${Math.round(r.diameter * 1000)} mm`], ["Slope", `${(r.slope * 100).toFixed(2)} % (min ${(sewerMinSlope(r.diameter, g) * 100).toFixed(2)} %)`],
       ["Depth", `${fmt(r.upDepth)} → ${fmt(r.downDepth)} m`], ["Peak flow", `${fmt(r.flow * 1000)} L/s`], ["Average", `${fmt(r.avgFlow * 86400, 0)} m³/day`],
@@ -1118,7 +1244,7 @@ function describe(kind, r, L) {
     case "treatment": return { title: themeName("treatment", "Wastewater treatment plant"), color: "#c9a45c", pos: r.pos, size: 60, rows: [["Inflow", `${fmt(r.flowM3Day, 0)} m³/day`], ["Serves", `${r.served.toLocaleString("en-US")} people`], ["Inlet depth", `${fmt(r.depth)} m`]] };
     case "lift": return { title: themeName("lift", "Sewage lift station"), color: "#c9a45c", pos: r.pos, depth: r.fromDepth / 2, size: 15, rows: [["Lifts from", `${fmt(r.fromDepth)} m to ${SEWER.minCover} m`], ["Peak flow", `${fmt(r.flow * 1000)} L/s`], ["Why", `gravity run would pass ${SEWER.maxDepth} m`]] };
     case "manhole": return { title: themeName("manhole", "Manhole"), color: "#9f8f70", pos: r.pos, depth: r.depth / 2, size: 10, rows: [["Invert depth", `${fmt(r.depth)} m`], ["Node", r.node]] };
-    case "tower": return { title: themeName("tower", "Elevated water tank"), color: NET.water.color, pos: r.pos, size: r.height * 1.5, rows: [["Height", `${fmt(r.height, 0)} m${r.pumped ? " + pumps" : ""}`], ["Storage", `${fmt(r.storageM3, 0)} m³ (one day)`], ["Serves", `${r.served.toLocaleString("en-US")} people`], ["Demand", `${fmt(r.demandM3Day, 0)} m³/day`]] };
+    case "tower": return { title: themeName("tower", "Elevated water tank"), color: NET.water.color, pos: r.pos, size: r.height * 1.5, rows: [["Height", `${fmt(r.height, 0)} m${r.pumped ? " + pumps" : ""}`], ...(r.elev ? [["Ground", `${fmt(r.elev)} m`]] : []), ["Storage", `${fmt(r.storageM3, 0)} m³ (one day)`], ["Serves", `${r.served.toLocaleString("en-US")} people`], ["Demand", `${fmt(r.demandM3Day, 0)} m³/day`]] };
     case "waterplant": return { title: themeName("waterplant", "Water treatment plant"), color: NET.water.color, pos: r.pos, size: 60, rows: [["Capacity", `${fmt(r.capacityM3Day, 0)} m³/day (max day)`]] };
     case "plant": return { title: themeName("plant", r.kind === "core reactor" ? "Core reactor" : "Power station"), color: NET.transmission.color, pos: r.pos, size: 80, rows: [["Capacity", `${r.capacityMW} MW`], ["City peak", `${fmt(L.infra.power.peakMW, 0)} MW`]] };
     case "substation": return { title: themeName("substation", `Substation ${r.kV} kV`), color: NET.power.color, pos: r.pos, size: 30, rows: [["Load", `${fmt(r.loadMVA)} of ${r.ratingMVA} MVA (${Math.round((100 * r.loadMVA) / r.ratingMVA)} %)`], ["Transformers", r.banks]] };

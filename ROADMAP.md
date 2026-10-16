@@ -8,7 +8,7 @@ Each phase lists what ships, what proves it, and the seam it opens for other eng
 |---|---|---|
 | 0 | Generator: physics → plan → buildings → structure → underground | ✅ 1.0.0 |
 | 1 | Time axis, flow model, failure analysis | ✅ 1.1.0 |
-| 2 | Terrain and water | ⏳ |
+| 2 | Terrain and water | ✅ 1.2.0 |
 | 3 | People, traffic, land value | ⏳ |
 | 4 | Multi-frequency chords | ⏳ |
 | 5 | Query layer and the inverse problem | ⏳ |
@@ -37,11 +37,13 @@ Each phase lists what ships, what proves it, and the seam it opens for other eng
 
 **Seam.** Keyframes are plain layouts, so anything that consumes a layout consumes a year of history. Hourly results are arrays indexed by the graph's node and edge ids.
 
-## Phase 2 — Terrain and water
+## Phase 2 — Terrain and water (1.2)
 
-Let the standing-wave amplitude be the terrain (or import a heightmap from another engine). Hills and basins give sewers somewhere to flow, pressure zones a reason to exist, metro depths that vary, rivers along nodal valleys, bridges and retaining walls. Heightfield in, drainage network out; the planner needs only a scalar field and its gradient, so a foreign terrain engine plugs in at `fieldPreview`'s interface.
+**Shipped.** `terrain: 'relief' | 'valleys' | { mode, relief, waterLevel, canals, heightmap }`. The signed wave (relief) or its amplitude (valleys) becomes the ground; basins flood into lakes or the sand lines into canals; a heightmap from another engine plugs in as a grid. Automatic relief keeps the ground under a 9 % slope; shore streets are embanked to the freeboard and water is crossed by bridges on piers. Sewers run on true inverts with plants on the low ground; tanks climb to the top of their zones, zones split by static head, pressure-reducing valves cap the basins with set points that keep the runs below them served; the flow model uses elevation heads. Arcologies span their basins and are terraced from the ground.
 
-Proof: sewers follow true gravity on the heightfield; pressure zones split by elevation band; no building footprint spans more than its allowed slope; rivers reach the perimeter.
+**Proof (shipped):** sewer inverts fall on the heightfield (every gravity run, checked); static head within 20–56 m at every customer with valves exercised on 40 m of relief; buildings exactly on the ground and never within the freeboard; bridges only where streets cross water; the reported grade matches a recompute; arcology faces to open ground within the limit by brute force; flat mode byte-identical to 1.1.
+
+**Not done (honest gaps):** rivers that flow to the perimeter (water is a level, not a drainage solution); retaining walls, cut-and-fill and approach ramps; metro depth is below the local ground rather than a level alignment; explicit relief far beyond automatic leaves pressure zones the zoning loop cannot finish (checks fail and say so).
 
 ## Phase 3 — People, traffic, land value
 
