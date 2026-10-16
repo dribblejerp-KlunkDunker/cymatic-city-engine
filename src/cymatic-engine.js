@@ -4,7 +4,7 @@
 //           -> districts, lots and buildings under planning and structural limits.
 // Pure JavaScript, no dependencies; runs in the browser and in Node.
 
-export const ENGINE_VERSION = '1.0.0';
+export const ENGINE_VERSION = '1.1.0';
 const TAU = Math.PI * 2;
 const G0 = 9.80665;
 
@@ -1132,6 +1132,10 @@ function symmetryNote(md) {
   return `${md.l} nodal circles on the sphere: ${md.m} meridian${md.m === 1 ? '' : 's'} and ${md.l - md.m} latitude ring${md.l - md.m === 1 ? '' : 's'}`;
 }
 
+// Recompute the plausibility checks for a layout whose buildings changed (a simulation keyframe).
+export function checksFor(meta, stats) {
+  return plausibilityChecks({ presetKey: meta.preset, preset: { arcology: !!meta.arcology }, enforce: meta.enforce !== false }, stats);
+}
 function plausibilityChecks(p, s) {
   const urban = !p.preset.arcology;
   const pct = (x) => `${(x * 100).toFixed(0)}%`;

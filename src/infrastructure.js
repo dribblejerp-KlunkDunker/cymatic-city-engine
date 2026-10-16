@@ -54,7 +54,7 @@ export const POWER = {
   substationMVA: { town: 30, city: 60, megastructure: 120, alien: 90 },
   loadingLimit: 0.75,     // initial substation count assumes 75 % loading; zones split only when a rating is exceeded
   cableDepth: 0.9, transmissionDepth: 1.5,
-  feederClassesMVA: [2, 4, 8, 12, 20, 30, 40, 60],
+  feederClassesMVA: [2, 4, 8, 12, 20, 30, 40, 60, 90, 120, 180],
   transmissionKV: 110, distributionKV: 11,
 };
 export const TRANSIT = {
@@ -381,7 +381,7 @@ export function buildInfrastructure(layout) {
       const peak = demand[u] * WATER.peakHour, e = graph.edges[pedge[u]];
       const need = Math.sqrt((4 * peak) / (Math.PI * WATER.designVelocity));
       const D = Math.max(WATER.minMain, pickDiameter(WATER.diameters, need));
-      mains.set(pedge[u], { edge: pedge[u], a: u, b: parent[u], length: e.len, diameter: D, flow: peak, velocity: peak / (Math.PI * D * D / 4), depth: WATER.cover, kind: 'distribution', zone: src[u] });
+      mains.set(pedge[u], { edge: pedge[u], a: u, b: parent[u], tree: [u, parent[u]], length: e.len, diameter: D, flow: peak, distFlow: peak, velocity: peak / (Math.PI * D * D / 4), depth: WATER.cover, kind: 'distribution', zone: src[u] });
       demand[parent[u]] += demand[u];
     }
     // loop mains: every remaining street gets a 150 mm main so no zone dead-ends
@@ -402,7 +402,7 @@ export function buildInfrastructure(layout) {
       const need = Math.sqrt((4 * flow) / (Math.PI * 2.0));
       const D = Math.max(0.3, pickDiameter(WATER.diameters, need), cur?.diameter ?? 0);
       const a = trunk.parent[e.a] === e.b ? e.b : e.a, b = a === e.a ? e.b : e.a; // flow runs away from the plant
-      const m = { edge: ei, a, b, length: e.len, diameter: D, flow: Math.max(flow, cur?.flow ?? 0), velocity: 0, depth: WATER.cover, kind: 'trunk', zone: -1 };
+      const m = { edge: ei, a, b, tree: cur?.tree ?? null, distFlow: cur?.distFlow ?? 0, length: e.len, diameter: D, flow: Math.max(flow, cur?.flow ?? 0), velocity: 0, depth: WATER.cover, kind: 'trunk', zone: cur?.zone ?? -1 };
       m.velocity = m.flow / (Math.PI * m.diameter * m.diameter / 4);
       mains.set(ei, m); trunkMains.push(m);
     }
@@ -457,22 +457,95 @@ export function buildInfrastructure(layout) {
       }, siteCandidates[0]);
     const peakMW = peakMVA * POWER.powerFactor;
     const plants = [{ node: plantNode, pos: graph.nodes[plantNode].pos, capacityMW: Math.ceil((peakMW * 1.25) / 50) * 50, kind: arcology || base === 'alien' ? 'core reactor' : 'power station' }];
-    // transmission: the shortest-path tree from the plant, so lines share corridors toward the plant
-    const tx = dijkstra(graph, [plantNode]);
-    const used = new Set();
-    const transmission = [];
-    for (const sst of substations) {
-      for (let u = sst.node; tx.parent[u] >= 0; u = tx.parent[u]) {
-        const ei = tx.pedge[u];
-        if (used.has(ei)) break; // the rest of the path is already built
-        used.add(ei);
-        const e = graph.edges[ei];
-        transmission.push({ edge: ei, a: tx.parent[u], b: u, length: e.len, kV: POWER.transmissionKV, depth: POWER.transmissionDepth });
-      }
+    // a second injection point (grid intertie) on the far side, so one trench never isolates the whole city
+    if (substations.length >= 2 && siteCandidates.length > 1) {
+      const far = siteCandidates.reduce((m, i) => (dist(graph.nodes[i].pos, graph.nodes[plantNode].pos) > dist(graph.nodes[m].pos, graph.nodes[plantNode].pos) ? i : m), siteCandidates[0]);
+      if (far !== plantNode) plants.push({ node: far, pos: graph.nodes[far].pos, capacityMW: Math.ceil((peakMW * 0.6) / 50) * 50, kind: 'grid intertie' });
     }
+    const sources = plants.map((p) => p.node);
+    // transmission: logical lines between the plant and substations, each realised along street edges.
+    // Start from the shortest-path tree (lines share corridors toward the plant), then add backup lines
+    // until no single line strands more than N1_TARGET of the people, as a meshed 110 kV grid would.
+    const subIndexOf = new Map(subs.map((n, i) => [n, i]));
+    const zonePeople = new Float64Array(subs.length);
+    for (let i = 0; i < N; i++) if (forest.src[i] >= 0) zonePeople[forest.src[i]] += resAt[i];
+    const totalPeople = Math.max(1, zonePeople.reduce((a, b) => a + b, 0));
+    const lines = []; // { from, to, edges[], length }  from/to are graph nodes (plant or substation)
+    const tx = dijkstra(graph, sources);
+    const pathEdges = (res, fromNode) => { const out = []; for (let u = fromNode; res.parent[u] >= 0; u = res.parent[u]) out.push(res.pedge[u]); return out; };
+    const addLine = (from, to, edges) => { if (from === to || !edges.length) return; lines.push({ from, to, edges, length: edges.reduce((s, ei) => s + graph.edges[ei].len, 0) }); };
+    // tree lines: each substation to the nearest plant/substation up its tree path
+    for (const sst of substations) {
+      const edges = [];
+      let u = sst.node;
+      while (tx.parent[u] >= 0) { edges.push(tx.pedge[u]); u = tx.parent[u]; if (subIndexOf.has(u) && u !== sst.node) break; }
+      addLine(u, sst.node, edges);
+    }
+    const N1_TARGET = 0.2;
+    const strandedBy = (skipSet) => {
+      const adjL = new Map(); const link = (x, y) => (adjL.get(x) ?? adjL.set(x, []).get(x)).push(y);
+      lines.forEach((l, i) => { if (skipSet.has(i)) return; link(l.from, l.to); link(l.to, l.from); });
+      const seen = new Set(sources), st = [...sources];
+      while (st.length) { const u = st.pop(); for (const v of adjL.get(u) ?? []) if (!seen.has(v)) { seen.add(v); st.push(v); } }
+      return seen;
+    };
+    for (let iter = 0; iter < 24 && lines.length; iter++) {
+      // worst corridor: the set of lines sharing one street edge
+      const edgeLines = new Map();
+      lines.forEach((l, i) => { for (const ei of l.edges) (edgeLines.get(ei) ?? edgeLines.set(ei, new Set()).get(ei)).add(i); });
+      let worstSet = null, worstShare = 0;
+      const seenKey = new Set();
+      for (const set of edgeLines.values()) {
+        const key = [...set].sort((x, y) => x - y).join(','); if (seenKey.has(key)) continue; seenKey.add(key);
+        const seen = strandedBy(set); let lost = 0; subs.forEach((n, i) => { if (!seen.has(n)) lost += zonePeople[i]; });
+        const sh = lost / totalPeople; if (sh > worstShare) { worstShare = sh; worstSet = set; }
+      }
+      if (worstShare <= N1_TARGET || !worstSet) break;
+      const seen = strandedBy(worstSet);
+      // tie the island to a substation that still has a path (substation-to-substation meshing); a source only as a last resort,
+      // because every line out of a source shares that source's own trench
+      const island = subs.filter((n) => !seen.has(n)), reachedSubs = subs.filter((n) => seen.has(n));
+      const mainland = reachedSubs.length ? reachedSubs : [...sources];
+      let best = null;
+      for (const a of island) for (const b of mainland) { const dd = dist(graph.nodes[a].pos, graph.nodes[b].pos); if (!best || dd < best[2]) best = [a, b, dd]; }
+      if (!best) break;
+      // route the backup away from trenches that already carry a line, so one dig does not take both
+      const busy = new Set(); for (const l of lines) for (const ei of l.edges) busy.add(graph.edges[ei]);
+      const res = dijkstra(graph, [best[1]], (e) => (busy.has(e) ? e.len * 8 : e.len));
+      if (!Number.isFinite(res.d[best[0]])) break;
+      addLine(best[1], best[0], pathEdges(res, best[0]));
+    }
+    const transmission = [];
+    const seenEdge = new Map();
+    lines.forEach((l, li) => {
+      for (const ei of l.edges) {
+        if (seenEdge.has(ei)) { transmission[seenEdge.get(ei)].lines.push(li); continue; }
+        const e = graph.edges[ei];
+        // orient from the end nearer the line's source
+        const a = dist(graph.nodes[e.a].pos, graph.nodes[l.from].pos) <= dist(graph.nodes[e.b].pos, graph.nodes[l.from].pos) ? e.a : e.b, b = a === e.a ? e.b : e.a;
+        seenEdge.set(ei, transmission.length);
+        transmission.push({ edge: ei, a, b, length: e.len, kV: POWER.transmissionKV, depth: POWER.transmissionDepth, line: li, lines: [li] });
+      }
+    });
+    // N-1 is scored per corridor: one dig cuts every line sharing that trench
+    const strandedSet = (skipSet) => {
+      const adjL = new Map(); const link = (x, y) => (adjL.get(x) ?? adjL.set(x, []).get(x)).push(y);
+      lines.forEach((l, i) => { if (skipSet.has(i)) return; link(l.from, l.to); link(l.to, l.from); });
+      const seen = new Set(sources), st = [...sources];
+      while (st.length) { const u = st.pop(); for (const v of adjL.get(u) ?? []) if (!seen.has(v)) { seen.add(v); st.push(v); } }
+      let lost = 0; subs.forEach((n, i) => { if (!seen.has(n)) lost += zonePeople[i]; });
+      return lost / totalPeople;
+    };
+    const corridorCache = new Map();
+    for (const t of transmission) {
+      const key = t.lines.slice().sort((x, y) => x - y).join(',');
+      if (!corridorCache.has(key)) corridorCache.set(key, strandedSet(new Set(t.lines)));
+      t.n1 = corridorCache.get(key);
+    }
+    const n1 = transmission.length ? Math.max(...transmission.map((t) => t.n1)) : 0;
     const nodeFeeder = new Int32Array(N).fill(-1);
     for (let i = 0; i < N; i++) if (forest.src[i] >= 0) nodeFeeder[i] = forest.src[i];
-    return { plants, substations, feeders, transmission, nodeFeeder, peakMW, peakMVA };
+    return { plants, sources, substations, feeders, transmission, lines, n1Transmission: n1, nodeFeeder, peakMW, peakMVA };
   })();
 
   // ---- transit: stations at the strongest building of each district, tunnels along an MST of street paths

@@ -7,7 +7,7 @@ Each phase lists what ships, what proves it, and the seam it opens for other eng
 | # | Phase | Status |
 |---|---|---|
 | 0 | Generator: physics → plan → buildings → structure → underground | ✅ 1.0.0 |
-| 1 | Time axis, flow model, failure analysis | 🔨 1.1 |
+| 1 | Time axis, flow model, failure analysis | ✅ 1.1.0 |
 | 2 | Terrain and water | ⏳ |
 | 3 | People, traffic, land value | ⏳ |
 | 4 | Multi-frequency chords | ⏳ |

@@ -152,6 +152,9 @@ textarea { font: 400 var(--step--1)/1.3 var(--mono); resize: vertical; }
 #pick { bottom: auto; top: calc(118px + env(safe-area-inset-top, 0px)); max-width: 300px; }
 #pick .pick-actions { display: flex; gap: 6px; margin-top: 8px; }
 #pick .pick-actions button { padding: 5px 9px; }
+#pick .pick-actions button.danger { border-color: color-mix(in srgb, var(--bad) 60%, var(--rule)); color: var(--bad); }
+.stat b.bad { color: var(--bad); } .stat b.warn { color: var(--warn); } .stat b.ok { color: var(--ok); }
+.hud .year { font: 400 var(--step-1)/1.2 var(--display); color: var(--sand); }
 #pick .kind { font: 500 0.68rem/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--c, var(--brass)); margin-bottom: 4px; }
 .slider-row { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; font-size: var(--step--1); color: var(--ink-dim); }
 .slider-row input[type=range] { grid-column: 1 / -1; }
@@ -183,6 +186,7 @@ textarea { font: 400 var(--step--1)/1.3 var(--mono); resize: vertical; }
     <div class="eyebrow" id="hud-eyebrow">Circular membrane · City</div>
     <div class="freq"><span id="hud-freq">432</span><small>Hz</small></div>
     <div class="mode" id="hud-mode">A4 −32¢ · mode (m 8, n 5)</div>
+    <div class="year" id="hud-year" hidden></div>
   </div>
   <div id="busy" hidden>Resonating…</div>
   <div id="pick" hidden></div>
@@ -306,6 +310,32 @@ textarea { font: 400 var(--step--1)/1.3 var(--mono); resize: vertical; }
         <ul class="checks" id="infra-checks"></ul>
       </section>
 
+      <section>
+        <h2>Simulation</h2>
+        <div class="inline">
+          <label class="field" for="sim-years" style="flex:1">Horizon (years)<input type="number" id="sim-years" min="10" max="400" step="10" value="120"></label>
+          <button class="primary" id="sim-run" style="align-self:end">Simulate growth</button>
+        </div>
+        <div id="sim-progress" class="hint" hidden></div>
+        <div id="timeline" hidden>
+          <div class="slider-row"><label for="year">Year</label><span><span id="year-label">—</span> <button id="plan-btn" type="button" style="padding:2px 7px;margin-left:6px" title="Show the generated plan again (the simulated city ends denser than the plan)">plan</button></span>
+            <input type="range" id="year" min="0" max="5" step="1" value="5"></div>
+          <ul class="checks" id="sim-events"></ul>
+        </div>
+        <div class="slider-row"><label for="hour">Hour of day</label><span id="hour-label">08:00</span>
+          <input type="range" id="hour" min="0" max="23" step="1" value="8"></div>
+        <label class="check" for="flows-on"><input type="checkbox" id="flows-on"><span>Colour the networks by load at this hour (pressure, voltage, fullness, crowding)</span></label>
+        <div class="stats" id="flow-stats"></div>
+        <ul class="checks" id="flow-flags"></ul>
+        <h2>Resilience (N-1)</h2>
+        <div class="stats" id="resilience"></div>
+        <p class="hint">Worst single failure per network as the share of people (or trips) it cuts off. Click an asset in the view and press Fail to try any other.</p>
+        <div id="impact" hidden>
+          <p class="hint" id="impact-text"></p>
+          <div class="actions"><button id="impact-clear">Clear failure</button></div>
+        </div>
+      </section>
+
       <details>
         <summary>Physics and structure</summary>
         <div>
@@ -347,6 +377,7 @@ textarea { font: 400 var(--step--1)/1.3 var(--mono); resize: vertical; }
           <p><b>Frequency to pattern.</b> The drive tone shakes a plate. Each plate has natural modes at fixed frequencies: Bessel zeros for the disk membrane (f ∝ j<sub>mn</sub>), m² + n² for the square Chladni plate, √(l(l+1)) for the sphere. The engine sums the modes near your frequency, weighted by a damped resonance of sharpness Q, the way a real driven plate responds.</p>
           <p><b>Pattern to plan.</b> Sand on a Chladni plate settles on the nodal lines, where the plate does not move. Those lines become boulevards. Contour rings follow the amplitude, and gradient streets run from each nodal line up to the crest, so a ring-and-spoke plan grows around every antinode. Amplitude sets density and height; the sign of the wave splits the city into alternating districts.</p>
           <p><b>Underground.</b> Every building gets a service connection to the nearest street. Sewers run under the streets as a gravity tree toward treatment plants at the edge: each pipe is sized by Manning's equation for its peak flow and laid at the Ten-State minimum slope for its diameter, so runs get deeper downstream until an 8 m limit triggers a lift station. Water mains are looped under every street and fed from elevated tanks, one per 25,000 people, sized for peak hour at 1.5 m/s. A power station feeds substations through 110 kV lines, and 11 kV feeders fan out to every block. Metro tunnels link the district landmarks along the streets, bored below every nearby foundation with 4.5 m of clearance. Lower gravity steepens the sewers and raises the tanks.</p>
+          <p><b>Simulation.</b> Simulate growth founds the city at the strongest antinode near the drive point and spreads it outward along the streets at 3.7 % built-up growth a year; buildings age on Weibull lifetimes and are rebuilt denser where the plate moves most, within the same structural limits. Each keyframe is a complete city with its networks rebuilt. The hour slider runs the networks under load: Hazen-Williams pressure along the water mains, three-phase voltage drop along the feeders, Manning partial-flow depth in the sewers and a gravity-model commute on the metro. Fail this on any asset shows who loses service; the N-1 tiles show the worst single failure per network. The 110 kV grid is meshed until no one line strands more than a fifth of the city.</p>
           <p><b>Realism rules.</b> Streets aim for UN-Habitat's 18 km of street per km². Every building keeps a setback from every road and sits within walking reach of a street. Heights stay under the material's self-weight limit σ/(ρ·g·3) and a slenderness limit that eases at low gravity. Population assumes 45 m² per resident and 15 m² per worker.</p>
           <p><b>What the frequency does not mean.</b> The standing-wave patterns are real physics; turning them into a city is a design choice. No study shows 432 Hz, Solfeggio tones or the Schumann resonance make a place healthier or more harmonious, so the engine treats every frequency alike. Some Neolithic chambers do resonate near 95–120 Hz; whether that was intended is still debated.</p>
         </div>
@@ -434,30 +465,65 @@ function applyTheme() {
 }
 
 // ------------------------------------------------------------ generation (worker when allowed)
-let worker = null, jobId = 0, pendingTimer = 0, layout = null, lastFrameKey = "";
+// The worker keeps the generated city and its simulation; the page asks for one keyframe at a time.
+let worker = null, jobId = 0, pendingTimer = 0, layout = null, baseLayout = null, lastFrameKey = "";
+let sim = null, simJob = 0, currentKeyframe = -1;
+const pending = new Map(); // id → { resolve, reject, onProgress }
 try {
-  const src = $("engine-src").textContent +
-    "\nself.onmessage=(e)=>{const{id,p}=e.data;try{const L=generateCity(p);L.infra=buildInfrastructure(L);delete L.field;delete L.infraToOBJ;self.postMessage({id,ok:true,L})}catch(err){self.postMessage({id,ok:false,error:String(err&&err.message||err)})}};";
+  const src = $("engine-src").textContent + `
+let CITY = null, SIM = null;
+const strip = (L) => { const o = { ...L }; delete o.field; delete o.infraToOBJ; return o; };
+self.onmessage = (e) => {
+  const { id, type, p, years, keyframes, k } = e.data;
+  try {
+    const gen = e.data.gen;
+    if (type === "generate") { CITY = generateCity(p); CITY.infra = buildInfrastructure(CITY); SIM = null; self.postMessage({ id, gen, ok: true, L: strip(CITY), R: resilience(CITY, CITY.infra) }); }
+    else if (type === "simulate") {
+      if (!CITY) throw new Error("No city to simulate yet");
+      SIM = simulate(CITY, { years, keyframes, onKeyframe: (i, K) => self.postMessage({ id, gen, progress: i + 1, of: K }) });
+      self.postMessage({ id, gen, ok: true, sim: { years: SIM.years, founding: SIM.founding, events: SIM.events, keyframes: SIM.keyframes.map((x) => ({ year: x.year, stats: x.stats, infraStats: x.infra.stats })) } });
+    }
+    else if (type === "keyframe") { if (!SIM) throw new Error("The simulation belongs to an earlier city"); const K = SIM.keyframes[k]; self.postMessage({ id, gen, ok: true, L: strip(K.layout), R: resilience(K.layout, K.infra), k }); }
+    else throw new Error("Unknown request " + type);
+  } catch (err) { self.postMessage({ id, gen: e.data.gen, ok: false, error: String(err && err.message || err) }); }
+};`;
   worker = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
-  worker.onmessage = (e) => { if (e.data.id === jobId) e.data.ok ? show(e.data.L) : fail(e.data.error); };
-  worker.onerror = (ev) => { ev.preventDefault?.(); worker = null; runLocal(jobId); };
+  worker.onmessage = (e) => {
+    const d = e.data, job = pending.get(d.id);
+    if (!job) return;
+    if (d.progress != null) { job.onProgress?.(d.progress, d.of); return; }
+    pending.delete(d.id);
+    d.ok ? job.resolve(d) : job.reject(new Error(d.error));
+  };
+  worker.onerror = (ev) => { ev.preventDefault?.(); worker = null; for (const [, j] of pending) j.reject(new Error("worker failed")); pending.clear(); regenerate(0); };
 } catch { worker = null; }
-
-function runLocal(id) {
-  setTimeout(() => {
-    if (id !== jobId) return;
-    try { const L = generateCity(engineParams()); L.infra = buildInfrastructure(L); delete L.field; show(L); } catch (err) { fail(err.message); }
-  }, 30);
+let LOCAL = { city: null, sim: null };
+let genSeq = 0; // every generated city gets a number; answers about an older city are dropped
+function ask(type, payload, onProgress) {
+  const id = ++jobId, gen = genSeq;
+  if (worker) return new Promise((resolve, reject) => { pending.set(id, { resolve, reject, onProgress }); worker.postMessage({ id, gen, type, ...payload }); });
+  return new Promise((resolve, reject) => setTimeout(() => {
+    try {
+      const strip = (L) => { const o = { ...L }; delete o.field; return o; };
+      if (type === "generate") { LOCAL.city = generateCity(payload.p); LOCAL.city.infra = buildInfrastructure(LOCAL.city); LOCAL.sim = null; resolve({ id, gen, L: strip(LOCAL.city), R: resilience(LOCAL.city, LOCAL.city.infra) }); }
+      else if (type === "simulate") { if (!LOCAL.city) throw new Error("No city to simulate yet"); LOCAL.sim = simulate(LOCAL.city, { years: payload.years, keyframes: payload.keyframes, onKeyframe: (i, K) => onProgress?.(i + 1, K) }); resolve({ id, gen, sim: { years: LOCAL.sim.years, founding: LOCAL.sim.founding, events: LOCAL.sim.events, keyframes: LOCAL.sim.keyframes.map((x) => ({ year: x.year, stats: x.stats, infraStats: x.infra.stats })) } }); }
+      else if (type === "keyframe") { if (!LOCAL.sim) throw new Error("The simulation belongs to an earlier city"); const K = LOCAL.sim.keyframes[payload.k]; resolve({ id, gen, L: strip(K.layout), R: resilience(K.layout, K.infra), k: payload.k }); }
+      else throw new Error("Unknown request " + type);
+    } catch (err) { reject(err); }
+  }, 30));
 }
 function regenerate(delay = 220) {
   clearTimeout(pendingTimer);
   syncControls();
-  pendingTimer = setTimeout(() => {
-    jobId++;
+  pendingTimer = setTimeout(async () => {
     $("busy").textContent = `Resonating at ${fmtHz(params.frequency)} Hz…`;
     $("busy").hidden = false;
     remember();
-    if (worker) worker.postMessage({ id: jobId, p: engineParams() }); else runLocal(jobId);
+    clearSimulation();
+    const gen = ++genSeq;
+    $("sim-run").disabled = true;
+    try { const r = await ask("generate", { p: engineParams() }); if (r.gen === genSeq) { baseLayout = r.L; baseLayout.resilience = r.R; show(r.L); $("sim-run").disabled = false; } }
+    catch (err) { if (gen === genSeq) fail(err.message); }
   }, delay);
 }
 function fail(msg) { $("busy").hidden = true; $("status").textContent = msg; }
@@ -592,8 +658,11 @@ function disposeWorld() {
   allMaterials = []; for (const k of Object.keys(layerMeshes)) delete layerMeshes[k];
 }
 
+let buildingInstance = [];
 function show(L) {
   layout = L;
+  buildingInstance = [];
+  currentFlows = null; currentImpact = null; $("impact").hidden = true;
   L.infraToOBJ = infraToOBJ; // the worker cannot send functions; the exporter needs this hook
   $("busy").hidden = true; $("pick").hidden = true; selected = null;
   // paint the plate from the settings this city was built with, not whatever the sliders say now
@@ -670,6 +739,7 @@ function show(L) {
       mesh.setColorAt(j, tmp);
     });
     mesh.userData = { kind: "building", index: idx, records: L.buildings };
+    idx.forEach((bi, j) => { buildingInstance[bi] = [mesh, j]; });
     world.add(mesh); pickTargets.push(mesh); layerMeshes.buildings.push(mesh);
   }
   // pitched roofs for town houses, crowns for landmarks
@@ -723,6 +793,11 @@ function show(L) {
   applyView();
   drawFigure(F);
   updatePanel(L);
+  $("hud-year").hidden = L.meta.year == null;
+  if (L.meta.year != null) $("hud-year").textContent = `Year ${L.meta.year} of ${sim?.years ?? L.meta.year}`;
+  for (const m of pickTargets) if (m.instanceColor) m.userData.baseColors = m.instanceColor.array.slice();
+  if ($("flows-on").checked) applyFlows();
+  updateResilience(L, L.resilience);
   invalidate();
 }
 
@@ -1093,10 +1168,164 @@ canvas.addEventListener("pointerup", (e) => {
   const focus = document.createElement("button"); focus.textContent = "Focus"; focus.addEventListener("click", () => focusOn(fpos, d.size));
   const close = document.createElement("button"); close.textContent = "Close"; close.addEventListener("click", clearPick);
   actions.append(focus, close);
-  box.append(kindEl, t, dl, actions); box.hidden = false;
+  const FAILABLE = ["tower", "waterplant", "water", "treatment", "lift", "sewer", "plant", "substation", "power", "transmission", "transit", "station"];
+  if (FAILABLE.includes(ud.kind)) {
+    const idx = ud.index ? ud.index[hit.instanceId] : hit.instanceId;
+    const failBtn = document.createElement("button"); failBtn.textContent = "Fail this"; failBtn.className = "danger";
+    failBtn.addEventListener("click", () => showImpact({ kind: ud.kind, index: idx }));
+    actions.append(failBtn);
+  }
+  if (currentFlows) {
+    const h = currentFlows, idx = ud.index ? ud.index[hit.instanceId] : hit.instanceId, extra = [];
+    if (ud.kind === "water") { const p = h.water.nodePressure[rec.a]; extra.push(["Pressure here", `${p.toFixed(0)} kPa`]); const mm = h.water.mains.find((x) => x.edge === rec.edge); if (mm) extra.push(["Flow now", `${(mm.flow * 1000).toFixed(1)} L/s · ${mm.velocity.toFixed(2)} m/s`]); }
+    if (ud.kind === "power") { const f = h.power.feeders.find((x) => x.edge === rec.edge); if (f) extra.push(["Loading now", `${(f.loading * 100).toFixed(0)} % (${f.amps.toFixed(0)} A, ${f.cable})`], ["Voltage here", `${(h.power.nodeVoltage[rec.a] * 100).toFixed(1)} %`]); }
+    if (ud.kind === "sewer") { const q = h.sewer.pipes.find((x) => x.edge === rec.edge); if (q) extra.push(["Fullness now", `${(q.fullness * 100).toFixed(0)} % deep`], ["Flow now", `${(q.flow * 1000).toFixed(1)} L/s`]); }
+    if (ud.kind === "transit") { const l = h.transit.links.find((x) => x.edge === rec.edge); if (l) extra.push(["Riders this hour", `${Math.round(l.loadAB).toLocaleString("en-US")} / ${Math.round(l.loadBA).toLocaleString("en-US")} by direction`], ["Load factor", `${(l.loadFactor * 100).toFixed(0)} %`]); }
+    if (ud.kind === "substation") { const sst = h.power.substations[idx]; if (sst) extra.push(["Loading now", `${(sst.loading * 100).toFixed(0)} % (${sst.loadMVA.toFixed(1)} MVA)`]); }
+    if (ud.kind === "station") { const st = h.transit.stations[idx]; if (st) extra.push(["Boardings this hour", Math.round(st.boardings).toLocaleString("en-US")], ["Catchment", `${st.catchmentResidents.toLocaleString("en-US")} residents, ${st.catchmentJobs.toLocaleString("en-US")} jobs`]); }
+    if (ud.kind === "building") { const lat = layout.infra.laterals.find((l) => l.building === idx); if (lat) extra.push(["Water pressure", `${h.water.nodePressure[lat.node].toFixed(0)} kPa`], ["Voltage", `${(h.power.nodeVoltage[lat.node] * 100).toFixed(1)} %`]); }
+    if (extra.length) { const hdr = document.createElement("div"); hdr.className = "kind"; hdr.textContent = `at ${hourLabel(h.hour)}`; const dl2 = document.createElement("dl"); for (const [k, v] of extra) { const dt = document.createElement("dt"); dt.textContent = k; const dd = document.createElement("dd"); dd.textContent = v; dl2.append(dt, dd); } box.append(hdr, dl2); }
+  }
+  box.prepend(kindEl, t, dl); box.append(actions); box.hidden = false;
   if (dbl) focusOn(fpos, d.size);
   invalidate();
 });
+
+// ------------------------------------------------------------ simulation: timeline
+function clearSimulation() {
+  sim = null; currentKeyframe = -1; $("timeline").hidden = true; $("sim-progress").hidden = true; $("hud-year").hidden = true;
+  $("sim-run").disabled = false; $("sim-events").replaceChildren();
+}
+$("sim-run").addEventListener("click", async () => {
+  if (!baseLayout) return;
+  const years = Math.max(10, Math.min(400, parseInt($("sim-years").value, 10) || 120));
+  const keyframes = 6;
+  $("sim-run").disabled = true; $("sim-progress").hidden = false; $("sim-progress").textContent = "Founding the city…";
+  try {
+    const r = await ask("simulate", { years, keyframes }, (done, K) => { if (K?.stats) $("sim-progress").textContent = `Year ${K.year}: ${K.stats.buildings.toLocaleString("en-US")} buildings, ${K.stats.population.toLocaleString("en-US")} people (${done} of ${keyframes})`; });
+    if (r.gen !== genSeq) return; // the city changed while this ran
+    sim = r.sim;
+    const yr = $("year"); yr.max = sim.keyframes.length - 1; yr.value = sim.keyframes.length - 1;
+    $("timeline").hidden = false; $("sim-progress").hidden = true;
+    $("sim-events").replaceChildren(...sim.events.map((e) => {
+      const li = document.createElement("li");
+      const pill = document.createElement("span"); pill.className = "pill info"; pill.textContent = `yr ${e.year}`;
+      const label = document.createElement("span"); label.textContent = `${e.population.toLocaleString("en-US")} people`;
+      const val = document.createElement("span"); val.className = "val"; val.textContent = `${e.built} built`;
+      const basis = document.createElement("span"); basis.className = "basis"; basis.textContent = e.note;
+      li.append(pill, label, val, basis); return li;
+    }));
+    showKeyframe(sim.keyframes.length - 1);
+  } catch (err) { $("sim-progress").textContent = `Simulation failed: ${err.message}`; $("sim-run").disabled = false; }
+});
+async function showKeyframe(k) {
+  if (!sim) return;
+  currentKeyframe = k;
+  const K = sim.keyframes[k];
+  $("year-label").textContent = `${K.year} · ${K.stats.buildings.toLocaleString("en-US")} buildings · ${K.stats.population.toLocaleString("en-US")} people`;
+  $("busy").textContent = `Year ${K.year}…`; $("busy").hidden = false;
+  try { const r = await ask("keyframe", { k }); if (r.gen === genSeq && r.k === currentKeyframe) { r.L.infraToOBJ = infraToOBJ; r.L.resilience = r.R; show(r.L); } }
+  catch (err) { fail(err.message); }
+}
+function showPlan() { if (!baseLayout) return; currentKeyframe = -1; $("year-label").textContent = "today's plan"; show(baseLayout); }
+$("plan-btn").addEventListener("click", showPlan);
+let yearTimer = 0;
+$("year").addEventListener("input", (e) => { clearTimeout(yearTimer); const k = +e.target.value; if (sim) $("year-label").textContent = `${sim.keyframes[k].year} · ${sim.keyframes[k].stats.buildings.toLocaleString("en-US")} buildings`; yearTimer = setTimeout(() => showKeyframe(k), 180); });
+
+// ------------------------------------------------------------ simulation: hourly flows
+let currentFlows = null, currentImpact = null;
+const hourLabel = (h) => `${String(h).padStart(2, "0")}:00`;
+const util = new THREE.Color(), cold = new THREE.Color("#3a5f8a"), warm = new THREE.Color("#ffd27a"), hot = new THREE.Color("#ff5a4a");
+function utilColor(base, u) { // 0 → base, 0.6 → warm, ≥1 → hot
+  util.set(base);
+  if (u <= 0.6) util.lerp(warm, Math.max(0, u / 0.6) * 0.8); else util.copy(warm).lerp(hot, Math.min(1, (u - 0.6) / 0.4));
+  return util;
+}
+function restoreColors(kinds) {
+  for (const m of pickTargets) if ((!kinds || kinds.includes(m.userData.kind)) && m.userData.baseColors && m.instanceColor) { m.instanceColor.array.set(m.userData.baseColors); m.instanceColor.needsUpdate = true; }
+}
+function ensureInstanceColor(m) {
+  if (!m.instanceColor) { const w = new THREE.Color(1, 1, 1); for (let i = 0; i < m.count; i++) m.setColorAt(i, w); m.userData.baseColors = m.instanceColor.array.slice(); }
+}
+let flowTimer = 0;
+function scheduleFlows() { clearTimeout(flowTimer); $("hour-label").textContent = hourLabel(+$("hour").value); flowTimer = setTimeout(applyFlows, 140); }
+function applyFlows() {
+  if (!layout?.infra) return;
+  const h = +$("hour").value;
+  $("hour-label").textContent = hourLabel(h);
+  const on = $("flows-on").checked;
+  if (!on) { currentFlows = null; restoreColors(["water", "power", "sewer", "transit", "substation"]); $("flow-stats").replaceChildren(); $("flow-flags").replaceChildren(); invalidate(); return; }
+  currentFlows = flows(layout, layout.infra, h);
+  const F = currentFlows, I = layout.infra;
+  const byEdge = (arr) => { const m = new Map(); for (const x of arr) m.set(x.edge, x); return m; };
+  const fw = byEdge(F.water.mains), fp = byEdge(F.power.feeders), fs = byEdge(F.sewer.pipes), ft = byEdge(F.transit.links);
+  for (const m of pickTargets) {
+    const kind = m.userData.kind, recs = m.userData.records;
+    if (!["water", "power", "sewer", "transit", "substation"].includes(kind)) continue;
+    if (!on) { if (m.userData.baseColors && m.instanceColor) { m.instanceColor.array.set(m.userData.baseColors); m.instanceColor.needsUpdate = true; } continue; }
+    ensureInstanceColor(m);
+    const base = NET[kind]?.color ?? "#e8b84a";
+    recs.forEach((r, i) => {
+      let u = 0;
+      if (kind === "water") { const p = F.water.nodePressure[r.a]; u = r.kind === "loop" ? 0 : p <= 0 ? 1 : Math.max(0, (F.water.staticKPa - p) / (F.water.staticKPa - 140)); }
+      else if (kind === "power") u = fp.get(r.edge)?.loading ?? 0;
+      else if (kind === "sewer") u = fs.get(r.edge)?.fullness ?? 0;
+      else if (kind === "transit") u = ft.get(r.edge)?.loadFactor ?? 0;
+      else if (kind === "substation") u = F.power.substations[i]?.loading ?? 0;
+      m.setColorAt(i, utilColor(base, u));
+    });
+    m.instanceColor.needsUpdate = true;
+  }
+  const tiles = [
+    ["Water: lowest pressure", `${F.water.minPressure.toFixed(0)} kPa`, F.water.criticalNodes ? "bad" : F.water.lowNodes ? "warn" : "ok"],
+    ["Water demand", `${(F.water.totalFlow * 1000).toFixed(0)} L/s`, ""],
+    ["Power: lowest voltage", `${(F.power.minPu * 100).toFixed(1)} %`, F.power.minPu < 0.95 ? "bad" : F.power.minPu < 0.97 ? "warn" : "ok"],
+    ["Busiest substation", `${(F.power.maxSubstationLoading * 100).toFixed(0)} %`, F.power.maxSubstationLoading > 1 ? "bad" : F.power.maxSubstationLoading > 0.8 ? "warn" : "ok"],
+    ["Sewers: fullest pipe", `${(F.sewer.maxFullness * 100).toFixed(0)} % deep`, F.sewer.surcharged ? "bad" : F.sewer.maxFullness > 0.8 ? "warn" : "ok"],
+    ["Metro: busiest link", F.transit.links.length ? `${(F.transit.maxLoadFactor * 100).toFixed(0)} % of capacity` : "no metro", F.transit.maxLoadFactor > 1 ? "bad" : F.transit.maxLoadFactor > 0.8 ? "warn" : "ok"],
+  ];
+  $("flow-stats").replaceChildren(...tiles.map(([k, v, cls]) => { const d = document.createElement("div"); d.className = "stat"; const a = document.createElement("span"); a.textContent = k; const b = document.createElement("b"); b.textContent = v; if (cls) b.className = cls; d.append(a, b); return d; }));
+  $("flow-flags").replaceChildren(...(F.flags.length ? F.flags : [`All networks within limits at ${hourLabel(h)}`]).map((t) => { const li = document.createElement("li"); const pill = document.createElement("span"); pill.className = `pill ${F.flags.length ? "warn" : "pass"}`; pill.textContent = F.flags.length ? "flag" : "ok"; const l = document.createElement("span"); l.textContent = t; li.append(pill, l); return li; }));
+  invalidate();
+}
+$("hour").addEventListener("input", scheduleFlows);
+$("flows-on").addEventListener("change", applyFlows);
+
+// ------------------------------------------------------------ simulation: failures and resilience
+function showImpact(asset) {
+  if (!layout?.infra) return;
+  clearImpact(false);
+  const r = impact(layout, layout.infra, asset);
+  currentImpact = r;
+  const red = new THREE.Color("#ff5a4a"), amber = new THREE.Color("#ffb347");
+  const paint = (list, c) => { for (const bi of list) { const inst = buildingInstance[bi]; if (!inst) continue; const [m, j] = inst; ensureInstanceColor(m); m.setColorAt(j, c); m.instanceColor.needsUpdate = true; } };
+  paint(r.degraded, amber); paint(r.affected, red);
+  $("impact").hidden = false;
+  const tot = layout.infra.laterals.reduce((a, l) => a + l.residents, 0) || 1, shareAll = r.share + (r.degradedPeople ?? 0) / tot;
+  $("impact-text").textContent = r.summary + (shareAll ? ` That touches ${(100 * shareAll).toFixed(shareAll < 0.01 ? 2 : 0)} % of the city's people${r.degraded.length ? ` (${(100 * r.share).toFixed(0)} % cut off outright)` : ""}.` : "");
+  if (viewMode === "underground") { viewMode = "xray"; applyView(); }
+  invalidate();
+}
+function clearImpact(hide = true) {
+  if (currentImpact) restoreColors(["building"]);
+  currentImpact = null;
+  if (hide) $("impact").hidden = true;
+  invalidate();
+}
+$("impact-clear").addEventListener("click", () => clearImpact(true));
+function updateResilience(L, R) {
+  if (!L?.infra) return;
+  R = R ?? resilience(L, L.infra);
+  const names = { water: "Water", power: "Power", sewer: "Sewer", transit: "Metro" };
+  $("resilience").replaceChildren(...Object.entries(R).map(([k, v]) => {
+    const d = document.createElement("div"); d.className = "stat";
+    const a = document.createElement("span"); a.textContent = `${names[k]} · worst: ${v.worst.kind === "none" ? "—" : v.worst.kind === "transmission" ? `${themeName("transmission", "transmission")} corridor` : `${themeName(v.worst.kind, v.worst.kind)} ${v.worst.index + 1}`}`;
+    const b = document.createElement("b"); b.textContent = v.worst.kind === "none" ? "n/a" : `${(100 * v.worstShare).toFixed(0)} % lost`; b.className = v.worstShare > 0.5 ? "bad" : v.worstShare > 0.2 ? "warn" : "ok";
+    d.append(a, b);
+    if (v.worst.kind !== "none") { const btn = document.createElement("button"); btn.textContent = "Show"; btn.style.marginTop = "6px"; btn.addEventListener("click", () => showImpact(v.worst)); d.append(btn); }
+    return d;
+  }));
+}
 
 // drive tone
 let audio = null, osc = null, gain = null, toneOn = false;
@@ -1148,8 +1377,12 @@ $("save-model").addEventListener("click", () => {
     `city.obj: Wavefront OBJ in metres, y up. One object per building (prisms) and per road segment (flat strips); the networks follow as line objects (sewer_pipes, water_mains, power_feeders, power_transmission, transit_tunnels, utility_tunnels) at their true depths.`,
     `layout.json: every road segment, building (position, up, forward, width, depth, height, floors, zone, phase) and tree, plus stats and checks, and "infra": the street graph (nodes, edges), service laterals, sewer pipes (diameter, slope, depths, flow), lift stations, treatment plants, water mains and tanks, power plant, substations, feeders and transmission, metro stations and tunnels, utility tunnels.`,
     `profile.json: the exact settings (and theme) that made this city; paste it into the engine's "Apply pasted profile" box or pass it to generateCity().`,
+    `simulation.json (when simulated): growth events and per-keyframe stats; flows-HHMM.json (when flows are on): pressures, voltages, fullness and metro loads for that hour.`,
     `Same settings + same seed reproduce this layout exactly.`].join("\n");
-  const zip = zipStore([{ name: "city.obj", text: toOBJ(layout) }, { name: "layout.json", text: toJSON(layout) }, { name: "profile.json", text: JSON.stringify(profileOf(), null, 2) }, { name: "README.txt", text: readme }]);
+  const files = [{ name: "city.obj", text: toOBJ(layout) }, { name: "layout.json", text: toJSON(layout) }, { name: "profile.json", text: JSON.stringify(profileOf(), null, 2) }, { name: "README.txt", text: readme }];
+  if (sim) files.push({ name: "simulation.json", text: JSON.stringify(sim, null, 1) });
+  if (currentFlows) files.push({ name: `flows-${hourLabel(currentFlows.hour).replace(":", "")}.json`, text: JSON.stringify({ ...currentFlows, water: { ...currentFlows.water, nodePressure: Array.from(currentFlows.water.nodePressure) }, power: { ...currentFlows.power, nodeVoltage: Array.from(currentFlows.power.nodeVoltage) } }) });
+  const zip = zipStore(files);
   offer(`${baseName()}.zip`, new Blob([zip]));
 });
 $("save-png").addEventListener("click", () => {
@@ -1159,7 +1392,7 @@ $("save-png").addEventListener("click", () => {
 });
 
 // small debugging hook: window.cymatic.layout / camera / controls
-window.cymatic = { get layout() { return layout; }, camera, controls, invalidate, focusOn, profile: profileOf, applyProfile };
+window.cymatic = { get layout() { return layout; }, get sim() { return sim; }, get flows() { return currentFlows; }, camera, controls, invalidate, focusOn, profile: profileOf, applyProfile, showKeyframe, showImpact };
 applyTheme();
 regenerate(0);
 </script>
