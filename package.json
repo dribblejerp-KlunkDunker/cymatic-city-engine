@@ -1,6 +1,6 @@
 {
   "name": "cymatic-city-engine",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "type": "module",
   "private": true,
   "scripts": {
@@ -13,7 +13,8 @@
     ".": "./src/cymatic-engine.js",
     "./infrastructure": "./src/infrastructure.js",
     "./simulation": "./src/simulation.js",
-    "./people": "./src/people.js"
+    "./people": "./src/people.js",
+    "./query": "./src/query.js"
   },
   "files": [
     "src",

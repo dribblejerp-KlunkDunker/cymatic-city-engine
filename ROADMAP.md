@@ -61,11 +61,13 @@ Each phase lists what ships, what proves it, and the seam it opens for other eng
 
 **Not done (honest gaps):** a megastructure whose shell and interior follow different harmonics (voices share one lot grid); scales beyond three voices; a literal two-tone sand figure (the intersections of the nodal sets) is not offered as a plan, by design — see `docs/research-notes/chords.md`.
 
-## Phase 5 — Query layer and the inverse problem
+## Phase 5 — Query layer and the inverse problem (1.5)
 
-Structured and natural-language questions over a layout and its simulation ("which districts lose water if tank 3 fails?", "where would a fourth line pay off?"), and the inverse problem: search the frequency space (and Q, drive point, plate) for a plan that meets constraints ("12 spokes, a central plaza, under 30 lift stations"). Exposes the engine as a tool for agents.
+**Shipped.** Structured queries over every collection of a city (buildings, streets, districts, tanks, substations, stations, lift stations, treatment, pipes) with filters, failure scenarios, grouping, aggregates and ordering; models built only when a query needs them. A plain-English template front end that shows the query it understood. Station suggestions by greedy maximal covering. The inverse problem: constraints on physics, plan, network and commute metrics; a physics scan over hundreds of frequencies with one candidate per mode; staged builds within a budget; refinement of the closest misses; distinct patterns first and near-misses when nothing fits. Five agent tools with JSON schemas. In the page: Ask the city (answers painted on the model) and Find a frequency (constraint rows, progress, Load).
 
-Proof: query answers equal direct computation; the inverse search returns only candidates that satisfy the constraints and is deterministic for a given seed.
+**Proof (shipped):** query answers equal direct computation from the layout, networks and commute; failure queries equal `impact()`; the English examples map to the queries they should; suggestion gains recomputed; every search candidate regenerated from its profile meets every constraint; the search is deterministic for a seed and stays within its budget; physics-only searches build nothing; agent-tool schemas match the engine's tables. Seventh independent review: two blocking defects (accessibility read as zero, refinement outside the given frequency range) and eight more fixed; every fix mutation-tested (11 of 11 mutants caught, plus the reviewer's 7).
+
+**Not done (honest gaps):** chords are not searched; the English parser covers templates, not paraphrase; no joins or disjunction in queries; suggestions only for metro stations; one candidate per mode can still miss a frequency of the same mode that a plan-level threshold needs (refinement recovers some); near-misses are ranked by the stages they reached; a 16-city search on the full city preset takes about a minute.
 
 ## Phase 6 — Export and headless CLI
 

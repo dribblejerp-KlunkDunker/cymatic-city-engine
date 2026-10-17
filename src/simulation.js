@@ -452,7 +452,17 @@ function metroFlows(layout, infra, h, modeShare = GROWTH.modeShare, metroTrips =
 
 // ---------------------------------------------------------------- failure analysis
 export function impact(layout, infra, asset) {
-  const { kind, index } = asset;
+  const { kind } = asset ?? {};
+  const ASSETS = {
+    tower: ['tank', infra.water.towers], waterplant: ['water treatment plant', [infra.water.plant]], water: ['water main', infra.water.mains],
+    treatment: ['sewage treatment plant', infra.sewer.plants], lift: ['lift station', infra.sewer.liftStations], sewer: ['sewer pipe', infra.sewer.pipes],
+    plant: ['power plant', infra.power.plants], substation: ['substation', infra.power.substations], power: ['feeder', infra.power.feeders],
+    transmission: ['transmission line', infra.power.transmission], transit: ['metro tunnel', infra.transit.tunnels], station: ['metro station', infra.transit.stations],
+  };
+  if (!ASSETS[kind]) throw new Error(`Unknown asset kind "${kind}" (${Object.keys(ASSETS).join(', ')})`);
+  const index = asset.index ?? 0, [noun, list] = ASSETS[kind], count = (list ?? []).filter(Boolean).length;
+  if (!Number.isInteger(index) || index < 0 || index >= count)
+    throw new RangeError(count ? `There is no ${noun} ${Number.isInteger(index) ? index + 1 : JSON.stringify(asset.index)}: this city has ${count} (numbered 1–${count}; index ${count === 1 ? 0 : `0–${count - 1}`})` : `This city has no ${noun}s`);
   const N = infra.graph.nodes.length;
   const nodeBuildings = new Map();
   for (const l of infra.laterals) (nodeBuildings.get(l.node) ?? nodeBuildings.set(l.node, []).get(l.node)).push(l);
@@ -485,7 +495,7 @@ export function impact(layout, infra, asset) {
   if (kind === 'waterplant') {
     const storage = infra.water.towers.reduce((s, t) => s + t.storageM3, 0), demand = infra.water.towers.reduce((s, t) => s + t.demandM3Day, 0) / 24;
     const hours = demand > 0 ? storage / demand : 0;
-    return done([], infra.laterals, { hoursOfStorage: hours }, `Treatment plant out: no refill. The tanks hold about ${hours.toFixed(0)} hours of average demand before the city runs dry.`);
+    return done([], infra.laterals, { hoursOfStorage: hours }, `Water treatment plant out: no refill. The tanks hold about ${hours.toFixed(0)} hours of average demand before the city runs dry.`);
   }
   if (kind === 'water') {
     const m = infra.water.mains[index];

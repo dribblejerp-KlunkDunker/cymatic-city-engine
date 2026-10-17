@@ -22,9 +22,18 @@ const combinedAll2 = combinedAll + '\n' +
   `const { ${PEOPLE_EXPORTS.join(', ')} } = (() => {\n` +
   ppl.replace(/^import .*$/gm, '').replace(/^export /gm, '') +
   `\nreturn { ${PEOPLE_EXPORTS.join(', ')} };\n})();\n`;
+const qry = readFileSync(new URL('./src/query.js', import.meta.url), 'utf8');
+const QUERY_EXPORTS = ['cityOf', 'query', 'ask', 'suggest', 'search', 'metricsOf', 'satisfies', 'agentTools', 'METRICS', 'COLLECTIONS', 'QUERY_OPS', 'ASK_EXAMPLES'];
+// the page has its own ask() (the worker messenger), so the English front end is askCity there
+const QUERY_BINDINGS = QUERY_EXPORTS.map((n) => (n === 'ask' ? 'ask: askCity' : n));
+if (/<\/script/i.test(qry)) throw new Error('sources must not contain a closing script tag');
+const combinedAll3 = combinedAll2 + '\n' +
+  `const { ${QUERY_BINDINGS.join(', ')} } = (() => {\nconst failImpact = impact, runPeople = people;\n` +
+  qry.replace(/^import .*$/gm, '').replace(/^export \{.*\};?$/gm, '').replace(/^export /gm, '') +
+  `\nreturn { ${QUERY_EXPORTS.join(', ')} };\n})();\n`;
 const out = viewer
-  .replace('@@ENGINE_TEXT@@', () => combinedAll2)
-  .replace('/*@@ENGINE@@*/', () => combinedAll2);
+  .replace('@@ENGINE_TEXT@@', () => combinedAll3)
+  .replace('/*@@ENGINE@@*/', () => combinedAll3);
 mkdirSync(new URL('./dist/', import.meta.url), { recursive: true });
 // artifact page (the host adds doctype, charset and viewport) and a standalone copy that opens anywhere
 writeFileSync(new URL('./dist/cymatic-city.html', import.meta.url), out);
