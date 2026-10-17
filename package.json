@@ -13,7 +13,8 @@
     ".": "./src/cymatic-engine.js",
     "./infrastructure": "./src/infrastructure.js",
     "./simulation": "./src/simulation.js",
-    "./people": "./src/people.js"
+    "./people": "./src/people.js",
+    "./query": "./src/query.js"
   },
   "files": [
     "src",
