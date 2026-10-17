@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.5.0 — 2026-10-17
+
+- Query layer (`src/query.js`): `cityOf` bundles a layout with lazily built networks and commute; `query()` over buildings, streets, districts, tanks, substations, stations, lift stations, treatment plants and pipes with `where` (`= != > >= < <= in`), `fail: {kind, index}` (answers from `impact()`), `groupBy`, aggregates (`count`, `sum`, `mean`, `min`, `max`), `orderBy`, `limit`, `fields`.
+- `ask()`: plain-English questions by template (failures, counts, superlatives, district population, inventory, busiest street, station siting); every answer carries the structured query it understood.
+- `suggest(city, 'metro-station')`: greedy maximal-covering station sites at the minimum spacing, with the street length to the nearest station.
+- `search()`: the inverse problem. Constraints and an objective over `METRICS` (physics, plan, networks, commute); physics scan with one candidate per dominant mode; staged builds within a budget; refinement of near misses; distinct patterns first; near-misses when nothing fits; deterministic per seed.
+- `agentTools()`: `generate_city`, `query_city`, `ask_city`, `suggest_metro_station`, `search_plans` with JSON schemas.
+- Viewer: Ask the city (example chips; failures painted on the model, buildings focused, station marker) and Find a frequency (constraint rows, example, budget, progress, Load); both run in the worker.
+- `impact()` refuses unknown kinds and out-of-range indices with the count the city has (it used to crash or answer zero); the water plant's summary says "Water treatment plant".
+- Tests: 117 (10 for queries); seventh independent review with fixes and mutation testing. Research note `docs/research-notes/queries.md`.
+
 ## 1.4.0 — 2026-10-17
 
 - Chords: `chord: [hz | {hz, weight}]` with up to three voices (weights 0.01–1, voices at least 1 % apart). Each voice is driven and normalised on its own; the composite amplitude is the time-averaged motion √Σ(w·A)², the signed field keeps the in-phase sign clipped to that envelope. Each voice lays its own streets as one era in its territory (where its weighted envelope is within 15 % of the strongest), with a budget in proportion to its share of the plate; each stretch of the perimeter belongs to the voice that shapes it; short disconnected fragments are dropped; lots belong to the voice that moves the plate most; growth settles the first voice before the next breaks ground (`eraStarts`), with the old city's routes preferring its own streets and the streets it lays along a later voice's lines credited to it in the keyframes (`follows`). A chord of one is the plain frequency byte for byte.

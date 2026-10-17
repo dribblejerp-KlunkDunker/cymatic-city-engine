@@ -394,6 +394,7 @@ textarea { font: 400 var(--step--1)/1.3 var(--mono); resize: vertical; }
           <button class="primary" id="search-run" style="align-self:end">Search</button>
         </div>
         <p class="hint" id="search-status" aria-live="polite"></p>
+        <p class="hint" id="search-stale" hidden>Found for other settings (preset, plate, terrain or rules); Load restores the settings each plan was measured with.</p>
         <ul class="checks" id="search-results"></ul>
         <h2>Resilience (N-1)</h2>
         <div class="stats" id="resilience"></div>
@@ -561,6 +562,7 @@ function applyTheme() {
 
 // ------------------------------------------------------------ generation (worker when allowed)
 // The worker keeps the generated city and its simulation; the page asks for one keyframe at a time.
+let WORKER_URL = null; // the engine worker's source, reused for a search worker that can be stopped
 let worker = null, jobId = 0, pendingTimer = 0, layout = null, baseLayout = null, lastFrameKey = "";
 let sim = null, simJob = 0, currentKeyframe = -1;
 const pending = new Map(); // id → { resolve, reject, onProgress }
@@ -602,7 +604,8 @@ self.onmessage = (e) => {
     else throw new Error("Unknown request " + type);
   } catch (err) { self.postMessage({ id, gen: e.data.gen, ok: false, error: String(err && err.message || err) }); }
 };`;
-  worker = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
+  WORKER_URL = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+  worker = new Worker(WORKER_URL);
   worker.onmessage = (e) => {
     const d = e.data, job = pending.get(d.id);
     if (!job) return;
@@ -782,6 +785,7 @@ function show(L) {
   layout = L;
   buildingInstance = [];
   currentFlows = null; currentImpact = null; $("impact").hidden = true;
+  markSearchStale();
   askMarker = null; $("ask-answer").textContent = ""; $("ask-details").hidden = true; // the world was rebuilt, and the answer was about the last city
   peopleResult = null; roadEdges = null; peopleLayout = null; $("people-stats").replaceChildren(); $("people-checks").replaceChildren(); $("people-progress").textContent = "";
   { const eraOpt = $("paint").querySelector('option[value="era"]'); eraOpt.hidden = eraOpt.disabled = !L.meta.chord; if ($("paint").value !== "era" || !L.meta.chord) $("paint").value = "none"; } // era colouring survives regenerating a chord, and is offered only for one
@@ -1689,15 +1693,15 @@ function renderSearchRows() {
   const box = $("search-rows");
   box.replaceChildren(...searchRows.map((r, i) => {
     const row = document.createElement("div"); row.className = "voice"; row.style.gridTemplateColumns = "1fr auto 88px auto";
-    const m = document.createElement("select"); m.setAttribute("aria-label", "Metric");
+    const m = document.createElement("select"); m.setAttribute("aria-label", "Metric"); m.style.fontFamily = "inherit"; m.style.fontSize = "13px"; m.style.minWidth = "0";
     for (const [k, v] of Object.entries(METRICS)) { const o = document.createElement("option"); o.value = k; o.textContent = v.label; o.title = `${v.doc} (${v.stage === "physics" ? "no city needed" : v.stage === "plan" ? "needs the plan" : v.stage === "infra" ? "needs the networks" : "needs the commute model"})`; if (k === r.metric) o.selected = true; m.append(o); }
     m.title = METRICS[r.metric]?.doc ?? "";
-    m.addEventListener("change", () => { r.metric = m.value; if (r.metric === "centralPlaza") r.value = true; renderSearchRows(); });
+    m.addEventListener("change", () => { r.metric = m.value; if (METRICS[r.metric]?.boolean) { r.value = true; if (!["=", "!="].includes(r.op)) r.op = "="; } else if (typeof r.value === "boolean") r.value = 0; renderSearchRows(); });
     const op = document.createElement("select"); op.setAttribute("aria-label", "Comparison");
-    for (const o of SEARCH_OPS) { const e = document.createElement("option"); e.value = o; e.textContent = o; if (o === r.op) e.selected = true; op.append(e); }
+    for (const o of METRICS[r.metric]?.boolean ? ["=", "!="] : SEARCH_OPS) { const e = document.createElement("option"); e.value = o; e.textContent = o; if (o === r.op) e.selected = true; op.append(e); }
     op.addEventListener("change", () => { r.op = op.value; });
     let val;
-    if (r.metric === "centralPlaza") { val = document.createElement("select"); for (const b of ["true", "false"]) { const e = document.createElement("option"); e.value = b; e.textContent = b === "true" ? "yes" : "no"; if (String(r.value) === b) e.selected = true; val.append(e); } val.addEventListener("change", () => { r.value = val.value === "true"; }); }
+    if (METRICS[r.metric]?.boolean) { val = document.createElement("select"); for (const b of ["true", "false"]) { const e = document.createElement("option"); e.value = b; e.textContent = b === "true" ? "yes" : "no"; if (String(r.value) === b) e.selected = true; val.append(e); } val.addEventListener("change", () => { r.value = val.value === "true"; }); }
     else { val = document.createElement("input"); val.type = "number"; val.step = "any"; val.value = r.value; val.addEventListener("change", () => { r.value = parseFloat(val.value); }); }
     val.setAttribute("aria-label", "Value");
     const rm = document.createElement("button"); rm.type = "button"; rm.textContent = "×"; rm.setAttribute("aria-label", "Remove this constraint"); rm.addEventListener("click", () => { searchRows.splice(i, 1); renderSearchRows(); });
@@ -1705,18 +1709,39 @@ function renderSearchRows() {
   }));
 }
 $("search-add").addEventListener("click", () => { searchRows.push({ metric: "liftStations", op: "<", value: 30 }); renderSearchRows(); });
-$("search-example").addEventListener("click", () => { searchRows = [{ metric: "radialBoulevards", op: "=", value: 12 }, { metric: "centralPlaza", op: "=", value: true }, { metric: "liftStations", op: "<", value: 30 }]; if (params.plate !== "circle") { params.plate = "circle"; regenerate(0); } renderSearchRows(); });
+$("search-example").addEventListener("click", () => { searchRows = [{ metric: "radialBoulevards", op: "=", value: 12 }, { metric: "centralPlaza", op: "=", value: true }, { metric: "liftStations", op: "<", value: 30 }]; if (params.plate !== "circle") { params.plate = "circle"; params.fundamentalHz = null; params.driveOffset = null; params.azimuthal = null; regenerate(0); } renderSearchRows(); }); // the same resets as the plate buttons
+// A search runs in its own worker so it can be stopped, and so the page's city stays responsive meanwhile.
+function runSearch(spec, onProgress) {
+  if (!WORKER_URL) return { promise: ask("search", { spec }, onProgress).then((r) => r.S), cancel: null };
+  const w = new Worker(WORKER_URL);
+  let fail = () => {};
+  const promise = new Promise((resolve, reject) => {
+    fail = reject;
+    w.onmessage = (e) => { const d = e.data; if (d.progress != null) { onProgress(d.progress, d.of); return; } w.terminate(); d.ok ? resolve(d.S) : reject(new Error(d.error)); };
+    w.onerror = (ev) => { ev.preventDefault?.(); w.terminate(); reject(new Error("the search worker failed")); };
+    w.postMessage({ id: 1, gen: 0, type: "search", spec });
+  });
+  return { promise, cancel: () => { w.terminate(); fail(new Error("stopped")); } };
+}
+let searching = null, searchFor = null; // the running search; the settings the shown results were found for
+const searchKey = (p) => JSON.stringify({ ...p, frequency: 0, Q: 0, driveOffset: 0, voices: [], weight0: 1, theme: "", seed: 0 });
+function markSearchStale() {
+  if (!searchFor || !$("search-results").children.length) return;
+  $("search-stale").hidden = searchKey(params) === searchFor.key;
+}
 $("search-run").addEventListener("click", async () => {
+  if (searching) { searching.cancel?.(); return; }
   const constraints = searchRows.filter((r) => r.metric && (typeof r.value === "boolean" || Number.isFinite(r.value)));
   if (!constraints.length) { $("search-status").textContent = "Add at least one constraint."; return; }
   const base = { ...engineParams() }; delete base.frequency; delete base.chord; // the search chooses the frequency; chords are not searched
   const budget = Math.max(2, Math.min(80, parseInt($("search-budget").value, 10) || 16));
-  $("search-run").disabled = true; $("search-results").replaceChildren(); $("search-status").textContent = "Scanning the plate's frequencies…";
-  const forGen = genSeq;
+  const snapshot = structuredClone({ ...params, voices: [], weight0: 1 });
+  $("search-results").replaceChildren(); $("search-stale").hidden = true; $("search-status").textContent = "Scanning the plate's frequencies…";
+  searching = runSearch({ base, constraints, budget, top: 6, seed: params.seed }, (i, n) => { $("search-status").textContent = `Building candidate cities: ${i} of ${n}`; });
+  $("search-run").textContent = searching.cancel ? "Stop" : "Searching…"; $("search-run").disabled = !searching.cancel;
   try {
-    const r = await ask("search", { spec: { base, constraints, budget, top: 6, seed: params.seed } }, (i, n) => { $("search-status").textContent = `Building candidate cities: ${i} of ${n}`; });
-    void forGen;
-    const S = r.S;
+    const S = await searching.promise;
+    searchFor = { key: searchKey(snapshot) };
     $("search-status").textContent = S.text;
     const list = S.candidates.length ? S.candidates : S.nearMisses;
     $("search-results").replaceChildren(...list.map((c) => {
@@ -1724,12 +1749,16 @@ $("search-run").addEventListener("click", async () => {
       const pill = document.createElement("span"); pill.className = `pill ${c.feasible ? "pass" : "warn"}`; pill.textContent = c.feasible ? "fits" : "close";
       const label = document.createElement("span"); label.textContent = `${fmtHz(c.profile.frequency)} Hz · ${c.dominant}`;
       const load = document.createElement("button"); load.type = "button"; load.textContent = "Load"; load.style.padding = "2px 8px";
-      load.addEventListener("click", () => { params.voices = []; params.weight0 = 1; params.frequency = c.profile.frequency; params.Q = c.profile.Q ?? params.Q; if (c.profile.driveOffset != null) params.driveOffset = c.profile.driveOffset; if (c.profile.plate) params.plate = c.profile.plate; regenerate(0); });
-      const basis = document.createElement("span"); basis.className = "basis"; basis.textContent = Object.entries(c.metrics).map(([k, v]) => `${k} ${typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(2)) : v}`).join(" · ");
+      // the settings the search ran with, plus what it chose: the loaded city is the one it measured
+      load.addEventListener("click", () => {
+        params = { ...structuredClone(snapshot), theme: params.theme, frequency: c.profile.frequency, Q: c.profile.Q ?? snapshot.Q, plate: c.profile.plate ?? snapshot.plate, ...(c.profile.driveOffset != null ? { driveOffset: c.profile.driveOffset } : {}) };
+        regenerate(0);
+      });
+      const basis = document.createElement("span"); basis.className = "basis"; basis.textContent = Object.entries(c.metrics).map(([k, v]) => `${METRICS[k]?.label ?? k} ${typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(2)) : v === true ? "yes" : v === false ? "no" : v}`).join(" · ");
       li.append(pill, label, load, basis); return li;
     }));
-  } catch (err) { $("search-status").textContent = `Search failed: ${err.message}`; }
-  finally { $("search-run").disabled = false; }
+  } catch (err) { $("search-status").textContent = err.message === "stopped" ? "Search stopped." : `Search failed: ${err.message}`; }
+  finally { searching = null; $("search-run").textContent = "Search"; $("search-run").disabled = false; }
 });
 renderSearchRows();
 
