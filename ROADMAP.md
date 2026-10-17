@@ -10,7 +10,7 @@ Each phase lists what ships, what proves it, and the seam it opens for other eng
 | 1 | Time axis, flow model, failure analysis | ✅ 1.1.0 |
 | 2 | Terrain and water | ✅ 1.2.0 |
 | 3 | People, traffic, land value | ✅ 1.3.0 |
-| 4 | Multi-frequency chords | ⏳ |
+| 4 | Multi-frequency chords | ✅ 1.4.0 |
 | 5 | Query layer and the inverse problem | ⏳ |
 | 6 | Export and headless CLI | ⏳ |
 | 7 | Fantasy as mechanics | ⏳ |
@@ -53,11 +53,13 @@ Each phase lists what ships, what proves it, and the seam it opens for other eng
 
 **Not done (honest gaps):** non-commute trips; signal and turning delay; parking supply; value feedback on growth (densification is still amplitude-led); route choice between equal paths; the emergent zoning is reported, not built.
 
-## Phase 4 — Multi-frequency chords
+## Phase 4 — Multi-frequency chords (1.4)
 
-Drive the plate with two or three frequencies. Interference gives an old city on one mode overlaid by a later expansion on another, or a megastructure whose shell and interior follow different harmonics. Musical intervals and scales become urban form. Ties to the time axis: each voice of the chord can be a growth era.
+**Shipped.** Two or three drive frequencies. Each voice is driven on its own; the composite amplitude is the plate's time-averaged motion and the signed field the clipped in-phase snapshot. Each voice lays its own streets as an era in the territory it shapes (budget by share of the plate, perimeter from the first voice), lots belong to the voice that moves the plate most under them, and growth settles the voices in order. Intervals one click away in the page; the tone plays the chord.
 
-Proof: the single-frequency case is reproduced exactly as a chord of one; nodal sets of a chord match the analytic superposition; every 1.0 invariant holds.
+**Proof (shipped):** a chord of one is byte-identical to the plain frequency; the composite equals the superposition of the single-voice previews point by point on every plate; each voice's boulevards lie on its own nodal set and its streets in its own territory; a faint voice converges to the single-voice city; brute-force clearance and overlap hold on chord cities; lot eras recomputed from the voices; era-0 lots all precede era-1 lots in the history; keyframe networks never fail their checks.
+
+**Not done (honest gaps):** a megastructure whose shell and interior follow different harmonics (voices share one lot grid); scales beyond three voices; a literal two-tone sand figure (the intersections of the nodal sets) is not offered as a plan, by design — see `docs/research-notes/chords.md`.
 
 ## Phase 5 — Query layer and the inverse problem
 

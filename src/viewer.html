@@ -218,7 +218,7 @@ textarea { font: 400 var(--step--1)/1.3 var(--mono); resize: vertical; }
         <div class="inline chord-add">
           <span class="hint">Chord:</span>
           <button type="button" data-ratio="1.5" title="A perfect fifth above the first voice">+ fifth</button>
-          <button type="button" data-ratio="1.3333" title="A perfect fourth above">+ fourth</button>
+          <button type="button" data-ratio="1.3333333333333333" title="A perfect fourth above">+ fourth</button>
           <button type="button" data-ratio="1.25" title="A major third above">+ third</button>
           <button type="button" data-ratio="2" title="An octave above">+ octave</button>
         </div>
@@ -447,7 +447,7 @@ const $ = (id) => document.getElementById(id);
 const DEFAULTS = { frequency: 432, plate: "circle", preset: "city", seed: 1, Q: 100, inverse: false,
   gravity: null, material: null, fundamentalHz: null, driveOffset: null, azimuthal: null,
   enforce: true, theme: "realistic", custom: { base: "city" }, customMaterial: null,
-  terrain: { mode: "flat", relief: null, waterLevel: null, canals: false }, voices: [] };
+  terrain: { mode: "flat", relief: null, waterLevel: null, canals: false }, voices: [], weight0: 1 };
 // voices: extra chord voices beyond the drive frequency, [{ hz, weight }] (up to MAX_VOICES − 1)
 let heightmapData = null; // { width, height, data: Float32Array, name } — kept in memory, not in the profile
 let params = { ...DEFAULTS };
@@ -465,7 +465,7 @@ const engineParams = () => {
   if (params.customMaterial) o.material = params.customMaterial;
   o.enforce = params.enforce !== false;
   o.terrain = terrainSpec();
-  if (params.voices?.length) o.chord = [{ hz: params.frequency, weight: 1 }, ...params.voices.slice(0, MAX_VOICES - 1).map((v) => ({ hz: v.hz, weight: v.weight ?? 1 }))];
+  if (params.voices?.length) o.chord = [{ hz: params.frequency, weight: params.weight0 ?? 1 }, ...params.voices.slice(0, MAX_VOICES - 1).map((v) => ({ hz: v.hz, weight: v.weight ?? 1 }))];
   return o;
 };
 function terrainSpec() {
@@ -496,7 +496,7 @@ function applyProfile(p) {
   if (!THEMES[n.theme]) n.theme = "realistic";
   if (Array.isArray(p.chord) && p.chord.length) {
     const vs = p.chord.map((v) => (typeof v === "object" && v ? { hz: +v.hz, weight: v.weight == null ? 1 : +v.weight } : { hz: +v, weight: 1 }));
-    n.frequency = vs[0].hz; n.voices = vs.slice(1, MAX_VOICES).filter((v) => Number.isFinite(v.hz) && v.hz > 0);
+    n.frequency = vs[0].hz; n.weight0 = Number.isFinite(vs[0].weight) && vs[0].weight > 0 ? vs[0].weight : 1; n.voices = vs.slice(1, MAX_VOICES).filter((v) => Number.isFinite(v.hz) && v.hz > 0);
   }
   if (p.terrain) {
     const t = typeof p.terrain === "string" ? { mode: p.terrain } : p.terrain;
@@ -557,7 +557,7 @@ self.onmessage = (e) => {
     else if (type === "simulate") {
       if (!CITY) throw new Error("No city to simulate yet");
       SIM = simulate(CITY, { years, keyframes, onKeyframe: (i, K) => self.postMessage({ id, gen, progress: i + 1, of: K }) });
-      self.postMessage({ id, gen, ok: true, sim: { years: SIM.years, founding: SIM.founding, events: SIM.events, keyframes: SIM.keyframes.map((x) => ({ year: x.year, stats: x.stats, infraStats: x.infra.stats })) } });
+      self.postMessage({ id, gen, ok: true, sim: { years: SIM.years, founding: SIM.founding, events: SIM.events, eraStarts: SIM.eraStarts, keyframes: SIM.keyframes.map((x) => ({ year: x.year, stats: x.stats, infraStats: x.infra.stats })) } });
     }
     else if (type === "keyframe") { if (!SIM) throw new Error("The simulation belongs to an earlier city"); const K = SIM.keyframes[k]; self.postMessage({ id, gen, ok: true, L: strip(K.layout), R: resilience(K.layout, K.infra), k }); }
     else if (type === "people") {
@@ -589,7 +589,7 @@ function ask(type, payload, onProgress) {
     try {
       const strip = (L) => { const o = { ...L }; delete o.field; return o; };
       if (type === "generate") { LOCAL.city = generateCity(payload.p); LOCAL.city.infra = buildInfrastructure(LOCAL.city); LOCAL.sim = null; resolve({ id, gen, L: strip(LOCAL.city), R: resilience(LOCAL.city, LOCAL.city.infra) }); }
-      else if (type === "simulate") { if (!LOCAL.city) throw new Error("No city to simulate yet"); LOCAL.sim = simulate(LOCAL.city, { years: payload.years, keyframes: payload.keyframes, onKeyframe: (i, K) => onProgress?.(i + 1, K) }); resolve({ id, gen, sim: { years: LOCAL.sim.years, founding: LOCAL.sim.founding, events: LOCAL.sim.events, keyframes: LOCAL.sim.keyframes.map((x) => ({ year: x.year, stats: x.stats, infraStats: x.infra.stats })) } }); }
+      else if (type === "simulate") { if (!LOCAL.city) throw new Error("No city to simulate yet"); LOCAL.sim = simulate(LOCAL.city, { years: payload.years, keyframes: payload.keyframes, onKeyframe: (i, K) => onProgress?.(i + 1, K) }); resolve({ id, gen, sim: { years: LOCAL.sim.years, founding: LOCAL.sim.founding, events: LOCAL.sim.events, eraStarts: LOCAL.sim.eraStarts, keyframes: LOCAL.sim.keyframes.map((x) => ({ year: x.year, stats: x.stats, infraStats: x.infra.stats })) } }); }
       else if (type === "keyframe") { if (!LOCAL.sim) throw new Error("The simulation belongs to an earlier city"); const K = LOCAL.sim.keyframes[payload.k]; resolve({ id, gen, L: strip(K.layout), R: resilience(K.layout, K.infra), k: payload.k }); }
       else if (type === "people") { const target = payload.k != null && LOCAL.sim ? LOCAL.sim.keyframes[payload.k].layout : LOCAL.city; if (!target) throw new Error("No city yet"); resolve({ id, gen, P: people(target, target.infra, { onProgress: (it, i, n) => onProgress?.(i, n, it) }) }); }
       else throw new Error("Unknown request " + type);
@@ -747,13 +747,14 @@ function show(L) {
   layout = L;
   buildingInstance = [];
   currentFlows = null; currentImpact = null; $("impact").hidden = true;
-  peopleResult = null; roadEdges = null; peopleLayout = null; $("people-stats").replaceChildren(); $("people-checks").replaceChildren(); $("people-progress").textContent = ""; if ($("paint").value !== "era") $("paint").value = "none";
+  peopleResult = null; roadEdges = null; peopleLayout = null; $("people-stats").replaceChildren(); $("people-checks").replaceChildren(); $("people-progress").textContent = "";
+  { const eraOpt = $("paint").querySelector('option[value="era"]'); eraOpt.hidden = eraOpt.disabled = !L.meta.chord; if ($("paint").value !== "era" || !L.meta.chord) $("paint").value = "none"; } // era colouring survives regenerating a chord, and is offered only for one
   L.infraToOBJ = infraToOBJ; // the worker cannot send functions; the exporter needs this hook
   $("busy").hidden = true; $("pick").hidden = true; selected = null;
   // paint the plate from the settings this city was built with, not whatever the sliders say now
   const m0 = L.meta;
   const F = fieldPreview({ frequency: m0.frequency, plate: m0.plate, preset: m0.preset, Q: m0.Q, fundamentalHz: m0.fundamentalHz,
-    driveOffset: m0.driveOffset, azimuthal: m0.azimuthal, gravity: m0.gravity, material: m0.material, terrain: previewTerrain(m0.terrain) });
+    driveOffset: m0.driveOffset, azimuthal: m0.azimuthal, gravity: m0.gravity, material: m0.material, terrain: previewTerrain(m0.terrain), ...(m0.chord ? { chord: m0.chord.map(({ hz, weight }) => ({ hz, weight })) } : {}) }); // the ground and the plate's colours follow the whole chord
   const T = F.terrain, hilly = T.mode !== "flat", waterLevel = Number.isFinite(T.waterLevel) ? T.waterLevel : -Infinity;
   disposeWorld();
   const style = L.meta.presetSpec?.style ?? PRESETS[L.meta.preset]?.style ?? "city";
@@ -1207,7 +1208,7 @@ for (const b of document.querySelectorAll("#chord .chord-add button")) b.addEven
   while (hz > hi && hz / 2 >= lo) hz /= 2; // fold the interval down an octave if the plate cannot reach it
   hz = +Math.min(hi, Math.max(lo, hz)).toFixed(1);
   const taken = [params.frequency, ...(params.voices ?? []).map((v) => v.hz)];
-  if (taken.some((f) => Math.abs(f - hz) < 0.005 * hz)) { $("status").textContent = `${fmtHz(hz)} Hz is already in the chord (the plate's range folds that interval onto it); type another frequency instead.`; return; }
+  if (taken.some((f) => Math.abs(f - hz) < 0.01 * Math.min(f, hz))) { $("status").textContent = `${fmtHz(hz)} Hz is already in the chord (the plate's range folds that interval onto it); type another frequency instead.`; return; }
   params.voices = [...(params.voices ?? []), { hz, weight: 0.7 }];
   regenerate(0);
 });
@@ -1313,7 +1314,7 @@ function describe(kind, r, L) {
       const grade = planLen > 0 && L.meta.terrain?.mode !== "flat" ? [["Grade", `${fmt(100 * Math.abs(rise) / planLen, 1)} %`]] : [];
       const tr = peopleResult ? roadTraffic(L.roads.indexOf(r)) : null;
       const traffic = tr ? [["Peak flow", `${Math.round(tr.flow)} veh/h both ways`], ["Load", `${Math.round(100 * tr.vc)} % of capacity · ${tr.speed.toFixed(0)} km/h`], ["Lanes", `${tr.lanes} (${tr.lanesNeeded} needed)`]] : [];
-      if (r.era != null && L.meta.chord) traffic.unshift(["Laid by", `voice ${r.era + 1} (${fmtHz(L.meta.chord[r.era].hz)} Hz)`]);
+      if (r.era != null && L.meta.chord) traffic.unshift(["Follows", `voice ${r.era + 1}'s sand lines (${fmtHz(L.meta.chord[r.era].hz)} Hz)`]);
       return { title: `${r.bridge ? "Bridge · " : ""}${r.kind[0].toUpperCase()}${r.kind.slice(1)} street`, color: ROAD[r.kind], pos: r.a, size: r.w * 4, rows: [["Width", `${fmt(r.w)} m`], ["Segment", `${fmt(dist3(r.a, r.b))} m`], ...grade, ...(r.bridge ? [["Deck", `${fmt(L.meta.terrain.waterLevel + L.meta.terrain.freeboard)} m, ${fmt(L.meta.terrain.freeboard)} m above the water`]] : []), ...traffic] };
     }
     case "sewer": return { title: r.forceMain ? `${themeName("sewer", "Sewer")} · force main (pumped)` : themeName("sewer", "Gravity sewer"), color: NET.sewer.color, pos: nodes[r.up].pos, depth: r.upDepth, size: 20, rows: [
@@ -1671,7 +1672,7 @@ $("status").textContent = "Checking whether this view can save files…";
   saveButtons.forEach((b) => (b.disabled = !downloads));
   $("status").textContent = downloads ? "" : "Saving files isn't available in this view.";
 })();
-const baseName = () => `cymatic-${layout.meta.preset}-${layout.meta.plate}-${fmtHz(layout.meta.frequency)}Hz-seed${layout.meta.seed}`;
+const baseName = () => `cymatic-${layout.meta.preset}-${layout.meta.plate}-${layout.meta.chord ? layout.meta.chord.map((v) => fmtHz(v.hz)).join('+') : fmtHz(layout.meta.frequency)}Hz-seed${layout.meta.seed}`;
 async function offer(filename, data) {
   try { await downloads.save({ filename, data }); $("status").textContent = `Saved ${filename}.`; }
   catch (err) {

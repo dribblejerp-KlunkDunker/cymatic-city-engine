@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.0 — 2026-10-17
+
+- Chords: `chord: [hz | {hz, weight}]` with up to three voices (weights 0.01–1, voices at least 1 % apart). Each voice is driven and normalised on its own; the composite amplitude is the time-averaged motion √Σ(w·A)², the signed field keeps the in-phase sign clipped to that envelope. Each voice lays its own streets as one era in its territory (where its weighted envelope is within 15 % of the strongest), with a budget in proportion to its share of the plate; short disconnected fragments are dropped; lots belong to the voice that moves the plate most; growth settles the first voice before the next breaks ground (`eraStarts`), with the old city's routes preferring its own streets. A chord of one is the plain frequency byte for byte.
+- Street graph edges keep `era` for chord streets; `toOBJ` names the chord in its header.
+- Viewer: interval buttons, voice rows with weights, chord HUD, chord tone, per-voice modes, paint by era (offered only for chords), inspector rows ("Built by", "Follows"); the ground and plate colours follow the whole chord; profiles carry `chord` with every weight; export names carry the chord.
+- Tests: 107 (9 for chords); sixth independent review with fixes and mutation testing. Research note `docs/research-notes/chords.md`.
+
 ## 1.3.0 — 2026-10-16
 
 - People: `people(layout, infra)` draws a commuting population from residents and jobs, chooses workplaces by a gravity model on street distance, splits walk / metro / car by door-to-door time, assigns peak-hour cars to the street graph with BPR congestion averaged over passes, and reports flow, v/c, speed and lanes needed per edge.

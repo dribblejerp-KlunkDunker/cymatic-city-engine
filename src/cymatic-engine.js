@@ -4,7 +4,7 @@
 //           -> districts, lots and buildings under planning and structural limits.
 // Pure JavaScript, no dependencies; runs in the browser and in Node.
 
-export const ENGINE_VERSION = '1.3.0';
+export const ENGINE_VERSION = '1.4.0';
 const TAU = Math.PI * 2;
 const G0 = 9.80665;
 
@@ -281,7 +281,11 @@ function resolveFields(p) {
     const resp = drivenResponse(modes, hz, p.Q);
     const field = makeField(p.plate, resp.active);
     const grid = sampleGrid(dom, field); // normalises the voice to its own peak
-    return { hz, weight, resp, field, grid };
+    // envelope radius: half the voice's own nodal spacing (area / length of its sand lines)
+    let nodal = 0;
+    for (const [a, b] of marchingSquares(grid, 0)) nodal += len3(sub(gridPt(dom, grid, b), gridPt(dom, grid, a)));
+    const spacing = nodal > 0 ? dom.area / nodal : dom.extent;
+    return { hz, weight, resp, field, grid, env: makeEnvelope(dom, grid, 0.5 * spacing) };
   });
   const field = makeChordField(voices);
   // the chord's sharpness is the weighted mean of its voices'
@@ -403,9 +407,13 @@ export function resolveParams(input = {}) {
     chord = input.chord.map((v, i) => {
       const hz = num(typeof v === 'object' && v !== null ? v.hz : v, `Voice ${i + 1}`);
       const weight = typeof v === 'object' && v !== null && v.weight != null ? num(v.weight, `Voice ${i + 1} weight`) : 1;
-      if (!(weight > 0) || weight > 1) throw new Error(`Voice ${i + 1} weight must be between 0 and 1`);
+      if (!(weight >= 0.01) || weight > 1) throw new Error(`Voice ${i + 1} weight must be between 0.01 and 1`);
       return { hz: checkHz(hz, `Voice ${i + 1}`), weight };
     });
+    // two voices within 1 % of each other drive the same modes: they would lay the same streets twice
+    for (let i = 0; i < chord.length; i++) for (let j = 0; j < i; j++) {
+      if (Math.abs(chord[i].hz - chord[j].hz) < 0.01 * Math.min(chord[i].hz, chord[j].hz)) throw new Error(`Voices ${j + 1} and ${i + 1} (${chord[j].hz} and ${chord[i].hz} Hz) are within 1 % of each other; a chord needs distinct voices`);
+    }
   }
   let frequency;
   if (chord && chord.length === 1) { frequency = chord[0].hz; chord = null; } // a chord of one is the plain frequency
@@ -429,6 +437,53 @@ export function resolveParams(input = {}) {
   };
 }
 export const MAX_VOICES = 3;
+// A voice lays streets where it moves the plate at least this close to the strongest voice there (w·A within 15 %):
+// its own territory plus a narrow band where the voices overlap, so their street networks cross and join.
+export const VOICE_BAND = 0.15;
+// Which voice shapes a point: the lot's own era is the voice that moves the plate most right under it.
+function voiceStrengths(voices, u, v) { return voices.map((vc) => vc.weight * vc.field.at(u, v).A); }
+function dominantVoice(voices, u, v) { const w = voiceStrengths(voices, u, v); let best = 0; for (let i = 1; i < w.length; i++) if (w[i] > w[best]) best = i; return best; }
+// Streets are judged by each voice's envelope instead: how strongly it vibrates in the neighbourhood (the local
+// maximum of its amplitude within half its nodal spacing). Its own sand lines, where its amplitude is zero, still
+// belong to it wherever the lobes on either side are its.
+function voiceEnvelopes(voices, u, v) { return voices.map((vc) => vc.weight * vc.env(u, v)); }
+function dominantEnvelope(voices, u, v) { const w = voiceEnvelopes(voices, u, v); let best = 0; for (let i = 1; i < w.length; i++) if (w[i] > w[best]) best = i; return best; }
+function inTerritory(voices, i, u, v) { const w = voiceEnvelopes(voices, u, v); return w[i] >= (1 - VOICE_BAND) * Math.max(...w); }
+// Max-filter a voice's amplitude grid over a radius in metres; returns a lookup env(u, v).
+function makeEnvelope(dom, g, radius) {
+  const { ni, nj, W, S, Qd } = g, n = (ni + 1) * W;
+  const A = new Float64Array(n); for (let id = 0; id < n; id++) A[id] = Math.hypot(S[id], Qd[id]);
+  const tmp = new Float64Array(n), out = new Float64Array(n);
+  const sphere = dom.kind === 'sphere';
+  const cellI = sphere ? (Math.PI * dom.Rs) / ni : (dom.scale * (dom.hi - dom.lo)) / ni;
+  const Ri = Math.max(1, Math.round(radius / cellI));
+  // along j (rows): on the sphere the cell narrows with sin θ, and longitude wraps
+  for (let i = 0; i <= ni; i++) {
+    let Rj;
+    if (sphere) { const sinT = Math.max(0.05, Math.sin((Math.PI * i) / ni)); Rj = Math.min(nj >> 1, Math.max(1, Math.round(radius / ((TAU * dom.Rs * sinT) / nj)))); }
+    else Rj = Math.max(1, Math.round(radius / ((dom.scale * (dom.hi - dom.lo)) / nj)));
+    for (let j = 0; j <= nj; j++) {
+      let m = 0;
+      for (let k = -Rj; k <= Rj; k++) {
+        let jj = j + k;
+        if (sphere) jj = ((jj % nj) + nj) % nj; else if (jj < 0 || jj > nj) continue;
+        m = Math.max(m, A[i * W + jj]);
+      }
+      tmp[i * W + j] = m;
+    }
+  }
+  for (let i = 0; i <= ni; i++) for (let j = 0; j <= nj; j++) {
+    let m = 0;
+    for (let k = Math.max(0, i - Ri); k <= Math.min(ni, i + Ri); k++) m = Math.max(m, tmp[k * W + j]);
+    out[i * W + j] = m;
+  }
+  return (u, v) => {
+    let i, j;
+    if (sphere) { i = Math.round((clamp(u, 0, Math.PI) / Math.PI) * ni); j = ((Math.round((v / TAU) * nj) % nj) + nj) % nj; }
+    else { i = clamp(Math.round(((u - dom.lo) / (dom.hi - dom.lo)) * ni), 0, ni); j = clamp(Math.round(((v - dom.lo) / (dom.hi - dom.lo)) * nj), 0, nj); }
+    return out[i * W + j];
+  };
+}
 
 // Terrain: flat (default), relief (lobes rise and sink with the wave: hills and basins, basins may flood),
 // valleys (every lobe is a hill, the nodal lines are valleys; optional canals), or an imported heightmap.
@@ -667,6 +722,9 @@ function labelDistricts(g) {
 // ---------------------------------------------------------------- roads
 function buildRoads(p, dom, field, g, opts = {}) {
   const pr = p.preset, roads = [], share = opts.share ?? 1, era = opts.era ?? null, withWall = opts.wall !== false;
+  // a voice keeps only the segments in its territory (judged at the midpoint); a single frequency keeps everything
+  const keep = opts.keep ?? null;
+  const kept = (A, B) => { if (!keep) return true; const [u, v] = dom.toNorm(scale3(add(A, B), 0.5)); return keep(u, v); };
   const toWorldGrid = (gi, gj) => { const [u, v] = g.coord(gi, gj); return dom.toWorld(u, v); };
   const gridPoint = (pt) => {
     if (dom.kind === 'plane') {
@@ -680,7 +738,7 @@ function buildRoads(p, dom, field, g, opts = {}) {
     let total = 0;
     for (const [a, b] of marchingSquares(g, level)) {
       const A = gridPoint(a), B = gridPoint(b), L = len3(sub(B, A));
-      if (L < 1e-6) continue;
+      if (L < 1e-6 || !kept(A, B)) continue;
       const r = { a: A, b: B, w, kind }; if (era != null) r.era = era;
       roads.push(r); total += L;
     }
@@ -735,6 +793,7 @@ function buildRoads(p, dom, field, g, opts = {}) {
     let spokes = [];
     for (let iter = 0; iter < 5; iter++) {
       spokes = traceSpokes(dom, field, seeds, dsep, pr);
+      if (keep) spokes = spokes.filter((r) => kept(r.a, r.b));
       if (era != null) for (const r of spokes) r.era = era;
       const total = base.reduce((s, r) => s + len3(sub(r.b, r.a)), 0) + spokes.reduce((s, r) => s + len3(sub(r.b, r.a)), 0);
       spokeSpacing = dsep;
@@ -1006,15 +1065,16 @@ export function generateCity(input = {}) {
   let rd;
   if (!voices) rd = buildRoads(p, dom, field, grid);
   else {
-    // each voice lays its own streets (nodal boulevards, rings, spokes) as one era of the city, sharing the street
-    // budget in proportion to its weight; the first voice also closes the perimeter
-    const wsum = voices.reduce((s, v) => s + v.weight, 0);
-    const parts = voices.map((v, i) => buildRoads(p, dom, v.field, v.grid, { share: v.weight / wsum, era: i, wall: i === 0 }));
-    rd = { ...parts[0], roads: parts.flatMap((x) => x.roads), targetLength: parts.reduce((s, x) => s + x.targetLength, 0) };
+    // each voice lays its own streets (nodal boulevards, rings, spokes) as one era of the city, but only where it
+    // shapes the plate (its territory, plus a narrow overlap band so the networks cross and join); its street
+    // budget is its share of the plate, so a faint voice lays little and a chord tends to its loudest voice
+    const territory = voiceTerritories(voices, grid);
+    const parts = voices.map((v, i) => buildRoads(p, dom, v.field, v.grid, { share: territory[i], era: i, wall: i === 0, keep: (u, vv) => inTerritory(voices, i, u, vv) }));
+    rd = { ...parts[0], roads: dropFragments(parts.flatMap((x) => x.roads), FRAGMENT_MIN), targetLength: parts.reduce((s, x) => s + x.targetLength, 0) };
     rd.nodalSpacing = Math.min(...parts.map((x) => x.nodalSpacing));
   }
   // which voice built a lot: the one that moves the plate most there
-  const eraAt = voices ? (u, v) => { let best = 0, bv = -1; voices.forEach((vc, i) => { const a = vc.weight * vc.field.at(u, v).A; if (a > bv) { bv = a; best = i; } }); return best; } : null;
+  const eraAt = voices ? (u, v) => dominantVoice(voices, u, v) : null;
   const maxW = Math.max(...Object.values(pr.widths));
   const access = pr.arcology ? Infinity : pr.streetSpacing * 0.8; // every building within reach of a street
   const planar = dom.kind === 'plane';
@@ -1435,7 +1495,7 @@ function plausibilityChecks(p, s) {
 // Wavefront OBJ of buildings (prisms) and roads (flat strips). y is up, units are metres.
 export function toOBJ(layout) {
   const lines = [`# Cymatic City Engine ${ENGINE_VERSION}`,
-    `# ${layout.meta.frequency} Hz (${layout.meta.note}) on ${layout.meta.plateLabel}, preset ${layout.meta.presetLabel}, seed ${layout.meta.seed}`];
+    `# ${layout.meta.chord ? `chord ${layout.meta.chord.map((v) => `${v.hz} Hz × ${v.weight}`).join(' + ')}` : `${layout.meta.frequency} Hz (${layout.meta.note})`} on ${layout.meta.plateLabel}, preset ${layout.meta.presetLabel}, seed ${layout.meta.seed}`];
   let vi = 1;
   const emit = (verts, faces, name) => {
     lines.push(`o ${name}`);
@@ -1496,21 +1556,58 @@ export function toJSON(layout) {
   return JSON.stringify(rest, (k, v) => (ArrayBuffer.isView(v) ? Array.from(v) : v));
 }
 
+// Clipping each voice's streets to its territory can leave short pieces of its sand lines touching no other street;
+// a chord drops disconnected street fragments shorter than this (streets join within 1 m, as in the street graph).
+export const FRAGMENT_MIN = 100;
+function dropFragments(roads, minLen) {
+  const cell = 40, hash = new Map(), key = (x, y, z) => `${x},${y},${z}`, cellOf = (P) => P.map((v) => Math.floor(v / cell));
+  const segDist = (P, A, B) => { const ab = sub(B, A), t = clamp(dot(sub(P, A), ab) / (dot(ab, ab) || 1), 0, 1); return len3(sub(P, add(A, scale3(ab, t)))); };
+  roads.forEach((r, i) => { for (const P of [r.a, r.b, scale3(add(r.a, r.b), 0.5)]) { const k = key(...cellOf(P)); (hash.get(k) ?? hash.set(k, []).get(k)).push(i); } });
+  const comp = new Int32Array(roads.length).fill(-1), compLen = [];
+  for (let s0 = 0; s0 < roads.length; s0++) {
+    if (comp[s0] >= 0) continue;
+    const c = compLen.length; comp[s0] = c; let L = 0; const stack = [s0];
+    while (stack.length) {
+      const i = stack.pop(), r = roads[i]; L += len3(sub(r.b, r.a));
+      for (const P of [r.a, r.b]) {
+        const [x, y, z] = cellOf(P);
+        for (let a = x - 1; a <= x + 1; a++) for (let b = y - 1; b <= y + 1; b++) for (let d = z - 1; d <= z + 1; d++) for (const j of hash.get(key(a, b, d)) ?? []) {
+          if (comp[j] >= 0) continue; const o = roads[j];
+          if (Math.min(segDist(r.a, o.a, o.b), segDist(r.b, o.a, o.b), segDist(o.a, r.a, r.b), segDist(o.b, r.a, r.b)) <= 1) { comp[j] = c; stack.push(j); }
+        }
+      }
+    }
+    compLen.push(L);
+  }
+  return roads.filter((r, i) => compLen[comp[i]] >= minLen || r.kind === 'wall');
+}
+
+// Share of the plate each voice shapes (dominant w·A), from the valid cells of the composite grid.
+function voiceTerritories(voices, grid) {
+  const n = new Float64Array(voices.length); let cells = 0;
+  for (let i = 0; i <= grid.ni; i += 2) for (let j = 0; j <= grid.nj; j += 2) {
+    if (!grid.valid[i * grid.W + j]) continue;
+    const [u, v] = grid.coord(i, j); n[dominantEnvelope(voices, u, v)]++; cells++;
+  }
+  return Array.from(n, (x) => (cells ? x / cells : 0));
+}
+
 // Field only (no city) — for painting the plate under the city and the 2D sand figure.
 export function fieldPreview(input = {}) {
   const p = resolveParams(input);
   const { field, voices } = resolveFields(p);
   const dom = makeDomain(p);
   const grid = sampleGrid(dom, field);
-  // the nodal spacing the city would have (for the automatic relief), from the zero contour length
-  let nodal = 0;
-  for (const [a, b] of marchingSquares(grid, 0)) { const A = gridPt(dom, grid, a), B = gridPt(dom, grid, b); nodal += len3(sub(B, A)); }
-  const terrain = makeTerrain(p, field, dom, nodal > 0 ? dom.area / nodal : Infinity, grid);
+  // the nodal spacing the city would have (for the automatic relief), from the zero contour length; a chord's city
+  // takes the smallest spacing of its voices, so the preview does too
+  const spacingOf = (g) => { let nodal = 0; for (const [a, b] of marchingSquares(g, 0)) { const A = gridPt(dom, g, a), B = gridPt(dom, g, b); nodal += len3(sub(B, A)); } return nodal > 0 ? dom.area / nodal : Infinity; };
+  const nodalSpacing = voices ? Math.min(...voices.map((v) => spacingOf(v.grid))) : spacingOf(grid);
+  const terrain = makeTerrain(p, field, dom, nodalSpacing, grid);
   return {
     at: field.at, toNorm: dom.toNorm, toWorld: dom.toWorld, inside: dom.inside,
     kind: dom.kind, shape: dom.shape, extent: dom.extent, Rs: dom.Rs ?? null, lo: dom.lo, hi: dom.hi,
     terrain: { mode: terrain.mode, relief: terrain.relief, waterLevel: terrain.waterLevel, shore: terrain.shore, z: terrain.z, lift: terrain.lift, waterAt: terrain.waterAt },
-    voices: voices ? voices.map((v) => ({ hz: v.hz, weight: v.weight, at: v.field.at, S: v.field.S })) : null,
+    voices: voices ? voices.map((v) => ({ hz: v.hz, weight: v.weight, at: v.field.at, S: v.field.S, env: v.env })) : null,
   };
 }
 function gridPt(dom, g, pt) {
