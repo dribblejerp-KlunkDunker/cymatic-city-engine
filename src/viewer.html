@@ -725,7 +725,7 @@ function show(L) {
   layout = L;
   buildingInstance = [];
   currentFlows = null; currentImpact = null; $("impact").hidden = true;
-  peopleResult = null; roadEdges = null; $("people-stats").replaceChildren(); $("people-checks").replaceChildren(); $("people-progress").textContent = ""; $("people-run").disabled = false;
+  peopleResult = null; roadEdges = null; peopleLayout = null; $("people-stats").replaceChildren(); $("people-checks").replaceChildren(); $("people-progress").textContent = ""; $("paint").value = "none";
   L.infraToOBJ = infraToOBJ; // the worker cannot send functions; the exporter needs this hook
   $("busy").hidden = true; $("pick").hidden = true; selected = null;
   // paint the plate from the settings this city was built with, not whatever the sliders say now
@@ -1404,7 +1404,7 @@ function applyFlows() {
   $("hour-label").textContent = hourLabel(h);
   const on = $("flows-on").checked;
   if (!on) { currentFlows = null; restoreColors(["water", "power", "sewer", "transit", "substation"]); $("flow-stats").replaceChildren(); $("flow-flags").replaceChildren(); invalidate(); return; }
-  currentFlows = flows(layout, layout.infra, h, peopleResult ? { modeShare: peopleResult.stats.modeShare.metro } : {});
+  currentFlows = flows(layout, layout.infra, h, peopleResult && peopleLayout === layout ? { metroTrips: peopleResult.stats.metroTrips } : {}); // the ridership the people model earned, when it is for this city
   const F = currentFlows, I = layout.infra;
   const byEdge = (arr) => { const m = new Map(); for (const x of arr) m.set(x.edge, x); return m; };
   const fw = byEdge(F.water.mains), fp = byEdge(F.power.feeders), fs = byEdge(F.sewer.pipes), ft = byEdge(F.transit.links);
@@ -1441,19 +1441,20 @@ $("hour").addEventListener("input", scheduleFlows);
 $("flows-on").addEventListener("change", applyFlows);
 
 // ------------------------------------------------------------ people, traffic and land value
-let peopleResult = null, roadEdges = null;
+let peopleResult = null, roadEdges = null, peopleLayout = null;
 // road segments are split into graph edges at junctions: find, for each drawn road, the edges that lie on it
 function mapRoadsToEdges(L) {
+  // hashed and matched in 3D, so a sphere's limb does not fold the far hemisphere onto the near one
   const G = L.infra.graph, cell = 60, hash = new Map();
-  const key = (x, z) => `${Math.floor(x / cell)},${Math.floor(z / cell)}`;
-  G.edges.forEach((e, i) => { const A = G.nodes[e.a].pos, B = G.nodes[e.b].pos; const k = key((A[0] + B[0]) / 2, (A[2] + B[2]) / 2); (hash.get(k) ?? hash.set(k, []).get(k)).push(i); });
+  const key = (x, y, z) => `${Math.floor(x / cell)},${Math.floor(y / cell)},${Math.floor(z / cell)}`;
+  G.edges.forEach((e, i) => { const A = G.nodes[e.a].pos, B = G.nodes[e.b].pos; const k = key((A[0] + B[0]) / 2, (A[1] + B[1]) / 2, (A[2] + B[2]) / 2); (hash.get(k) ?? hash.set(k, []).get(k)).push(i); });
   return L.roads.map((r) => {
-    const out = [], ax = r.a[0], az = r.a[2], dx = r.b[0] - ax, dz = r.b[2] - az, L2 = dx * dx + dz * dz || 1e-9;
-    const x0 = Math.floor(Math.min(r.a[0], r.b[0]) / cell) - 1, x1 = Math.floor(Math.max(r.a[0], r.b[0]) / cell) + 1, z0 = Math.floor(Math.min(r.a[2], r.b[2]) / cell) - 1, z1 = Math.floor(Math.max(r.a[2], r.b[2]) / cell) + 1;
-    for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) for (const i of hash.get(`${x},${z}`) ?? []) {
-      const e = G.edges[i], A = G.nodes[e.a].pos, B = G.nodes[e.b].pos, mx = (A[0] + B[0]) / 2, mz = (A[2] + B[2]) / 2;
-      const t = ((mx - ax) * dx + (mz - az) * dz) / L2; if (t < -0.02 || t > 1.02) continue;
-      const px = ax + t * dx, pz = az + t * dz; if (Math.hypot(mx - px, mz - pz) > 1.0) continue;
+    const out = [], d = [r.b[0] - r.a[0], r.b[1] - r.a[1], r.b[2] - r.a[2]], L2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] || 1e-9;
+    const lo = [0, 1, 2].map((c) => Math.floor(Math.min(r.a[c], r.b[c]) / cell) - 1), hi = [0, 1, 2].map((c) => Math.floor(Math.max(r.a[c], r.b[c]) / cell) + 1);
+    for (let x = lo[0]; x <= hi[0]; x++) for (let y = lo[1]; y <= hi[1]; y++) for (let z = lo[2]; z <= hi[2]; z++) for (const i of hash.get(`${x},${y},${z}`) ?? []) {
+      const e = G.edges[i], A = G.nodes[e.a].pos, B = G.nodes[e.b].pos, m = [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2, (A[2] + B[2]) / 2];
+      const t = ((m[0] - r.a[0]) * d[0] + (m[1] - r.a[1]) * d[1] + (m[2] - r.a[2]) * d[2]) / L2; if (t < -0.02 || t > 1.02) continue;
+      if (Math.hypot(m[0] - r.a[0] - t * d[0], m[1] - r.a[1] - t * d[1], m[2] - r.a[2] - t * d[2]) > 1.0) continue;
       out.push(i);
     }
     return out;
@@ -1510,11 +1511,11 @@ function renderPeople(P) {
 $("people-run").addEventListener("click", async () => {
   if (!layout?.infra) return;
   $("people-run").disabled = true; $("people-progress").textContent = "Drawing the population…";
-  const k = currentKeyframe >= 0 ? currentKeyframe : null;
+  const k = currentKeyframe >= 0 ? currentKeyframe : null, forLayout = layout;
   try {
-    const r = await ask("people", { k }, (i, n, it) => { $("people-progress").textContent = `Assigning trips: pass ${it}, origin ${i} of ${n}`; });
-    if (r.gen !== genSeq) return;
-    peopleResult = r.P; roadEdges = mapRoadsToEdges(layout);
+    const r = await ask("people", { k }, (i, n, it) => { if (layout === forLayout) $("people-progress").textContent = `Assigning trips: pass ${it}, origin ${i} of ${n}`; });
+    if (r.gen !== genSeq || layout !== forLayout) return; // the city or the year changed while this ran
+    peopleResult = r.P; peopleLayout = layout; roadEdges = mapRoadsToEdges(layout);
     renderPeople(peopleResult); $("people-progress").textContent = `${(peopleResult.timingMs / 1000).toFixed(1)} s`;
     if ($("paint").value === "none") $("paint").value = "traffic";
     applyPaint();

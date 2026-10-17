@@ -24,6 +24,10 @@ export const TRAFFIC = {
   carFixedMin: 8,          // parking search and the walk at both ends
 };
 
+// The land-value formula on its own, so it can be checked: monotone in each of its three inputs.
+export function landValueOf(access, amp, metroNear) {
+  return LAND.accessWeight * Math.pow(Math.max(0, access), 0.7) + LAND.ampWeight * amp + LAND.metroWeight * metroNear;
+}
 export const LAND = {
   accessWeight: 0.6, ampWeight: 0.25, metroWeight: 0.15, // land-value index = weighted mix, normalised to its max
   coreShare: 0.15, mixedShare: 0.35,                     // emergent zoning: top 15 % of value is core, next 35 % mixed
@@ -95,9 +99,14 @@ export function people(layout, infra, opts = {}) {
   const residents = resAt.reduce((s, x) => s + x, 0), jobs = jobsAt.reduce((s, x) => s + x, 0);
   const commutersTotal = Math.min(residents * TRAFFIC.commuters, jobs); // nobody commutes to a job that is not there
   const jobNodes = []; for (let i = 0; i < N; i++) if (jobsAt[i] > 0) jobNodes.push(i);
-  const empty = { residents: Math.round(residents), jobs: Math.round(jobs), commuters: 0 };
   if (!commutersTotal || !jobNodes.length) {
-    return { sample: { origins: [], commuters: 0 }, trips: { total: 0, meanKm: 0, meanMin: 0, modeShare: { walk: 0, metro: 0, car: 0 } }, traffic: { edgeFlow: new Float64Array(E), vc: new Float64Array(E), speedKmh: new Float64Array(E), congestedKm: 0, vkt: 0, lanesNeeded: new Int8Array(E), underbuiltKm: 0, overbuiltKm: 0 }, access: new Float64Array(N), landValue: new Float64Array(layout.buildings.length), emergentZone: [], zoneAgreement: 0, stats: empty, checks: [], timingMs: Date.now() - t0 };
+    // nobody to move: the full result shape, all zero, so anything reading it still works
+    const modeShare = { walk: 0, metro: 0, car: 0 }, lanesArr = Int8Array.from(graph.edges.map(laneCount)), capArr = Float64Array.from(graph.edges.map(edgeCapacity));
+    const speed = Float64Array.from(graph.edges.map((e) => TRAFFIC.freeSpeedKmh[e.kind] ?? 30));
+    let streetKm = 0; for (const e of graph.edges) if (e.kind !== 'service' && e.kind !== 'corridor') streetKm += e.len / 1000;
+    const stats = { residents: Math.round(residents), jobs: Math.round(jobs), commuters: 0, sampledOrigins: 0, meanTripKm: 0, meanTripMin: 0, modeShare, peakVehicles: 0, vkt: 0, congestedKm: 0, streetKm, underbuiltKm: 0, overbuiltKm: 0, maxVC: 0, metroDaily: 0, metroTrips: 0, carKmPerCommuter: 0, carKm: 0, zoneAgreement: 0, meanLandValue: 0 };
+    const checks = [{ id: 'commute', label: 'Mean commute', value: 'nobody commutes', status: 'info', basis: residents ? 'There are people but no jobs to go to' : 'There is nobody here' }];
+    return { sample: { origins: [], commuters: new Float64Array(0) }, trips: { total: 0, meanKm: 0, meanMin: 0, modeShare, assigned: 0 }, traffic: { edgeFlow: new Float64Array(E), vc: new Float64Array(E), speedKmh: speed, lanes: lanesArr, lanesNeeded: new Int8Array(E).fill(1), capacity: capArr, congestedKm: 0, vkt: 0, underbuiltKm: 0, overbuiltKm: 0 }, access: new Float64Array(N), landValue: new Float64Array(layout.buildings.length), emergentZone: layout.buildings.map((b) => b.zone), zoneAgreement: 0, stats, checks, timingMs: Date.now() - t0 };
   }
 
   // sampled origins carry their neighbours' commuters: every resident node is assigned to the sampled node nearest to it by street distance
@@ -113,7 +122,7 @@ export function people(layout, infra, opts = {}) {
   for (let k = 0; k < origins.length; k++) originCommuters[k] *= expansion;
 
   const metro = metroModel(layout, infra);
-  graph.edges.forEach((e, i) => { e.index = i; }); // the congested-time weight looks edges up by index
+  const edgeIndex = new Map(graph.edges.map((e, i) => [e, i])); // the congested-time weight looks edges up by index
   const lanes = graph.edges.map(laneCount), capacity = graph.edges.map(edgeCapacity), t0min = graph.edges.map(freeFlowMinutes);
 
   // ---- assignment: all-or-nothing on current congested times, averaged (MSA)
@@ -122,26 +131,27 @@ export function people(layout, infra, opts = {}) {
   const access = new Float64Array(N); // Hansen, at sampled origins (spread to other nodes below)
   let trips = 0, tripKm = 0, tripMin = 0, walkTrips = 0, metroTrips = 0, carTrips = 0, carKm = 0;
   let byOriginSum = 0;
+  const destPicks = new Array(origins.length).fill(null);
   for (let it = 1; it <= iterations; it++) {
     const aon = new Float64Array(E);
     trips = 0; tripKm = 0; tripMin = 0; walkTrips = 0; metroTrips = 0; carTrips = 0; carKm = 0; byOriginSum = 0;
-    const timeOf = (e) => edgeMin[e.index];
+    const timeOf = (e) => edgeMin[edgeIndex.get(e)];
     for (let k = 0; k < origins.length; k++) {
       const o = origins[k], C = originCommuters[k];
       if (C <= 0) continue;
       // shortest paths by congested time (minutes); distance along those paths for the gravity choice
-      const { d: tMin, parent, pedge } = dijkstra(graph, [o], timeOf);
+      const { d: tMin, parent, pedge, order } = dijkstra(graph, [o], timeOf);
       const dKm = new Float64Array(N);
-      // path distance by walking parents is O(path) per node; instead accumulate along the tree in order of time
-      const order = Array.from({ length: N }, (_, i) => i).filter((i) => Number.isFinite(tMin[i])).sort((a, b) => tMin[a] - tMin[b]);
-      for (const v of order) { if (parent[v] >= 0) dKm[v] = dKm[parent[v]] + graph.edges[pedge[v]].len / 1000; }
+      for (const v of order) if (parent[v] >= 0) dKm[v] = dKm[parent[v]] + graph.edges[pedge[v]].len / 1000; // parents settle first
       // Hansen accessibility to jobs on network distance
       let acc = 0;
       for (const j of jobNodes) if (Number.isFinite(tMin[j])) acc += jobsAt[j] * Math.exp(-dKm[j] / TRAFFIC.decayKm);
       access[o] = acc;
-      // destinations: gravity weights, sampled so each origin traces a bounded number of paths
+      // destinations: gravity weights; the sample is drawn once (first pass) and kept, so later passes change only
+      // the routes and the averaging is over routes, not over different draws
       const w = jobNodes.map((j) => (Number.isFinite(tMin[j]) ? jobsAt[j] * Math.exp(-dKm[j] / TRAFFIC.decayKm) : 0));
-      const picks = weightedSample(w, Math.min(48, jobNodes.length), rng);
+      if (!destPicks[k]) destPicks[k] = weightedSample(w, Math.min(48, jobNodes.length), rng);
+      const picks = destPicks[k];
       const wsum = picks.reduce((s, p) => s + w[p], 0);
       if (!(wsum > 0)) continue;
       // every picked destination takes its share of the origin's commuters in proportion to its gravity weight
@@ -205,7 +215,7 @@ export function people(layout, infra, opts = {}) {
     const n = nodeOfBuilding[i];
     const acc = n >= 0 ? accessNode[n] : 0;
     const near = metro && n >= 0 && metro.nearest[n] >= 0 ? 1 - metro.walk[n] / TRAFFIC.metroAccessM : 0;
-    landValue[i] = LAND.accessWeight * Math.pow(acc, 0.7) + LAND.ampWeight * b.amp + LAND.metroWeight * near;
+    landValue[i] = landValueOf(acc, b.amp, near);
     vmax = Math.max(vmax, landValue[i]);
   });
   if (vmax > 0) for (let i = 0; i < B.length; i++) landValue[i] /= vmax;
@@ -222,7 +232,7 @@ export function people(layout, infra, opts = {}) {
     residents: Math.round(residents), jobs: Math.round(jobs), commuters: Math.round(commutersTotal), sampledOrigins: origins.length,
     meanTripKm: meanKm, meanTripMin: meanMin, modeShare, peakVehicles: Math.round((carTrips * TRAFFIC.peakShare) / TRAFFIC.occupancy),
     vkt, congestedKm, streetKm, underbuiltKm, overbuiltKm, maxVC,
-    metroDaily: Math.round(metroTrips * 2), carKmPerCommuter: carTrips ? carKm / carTrips : 0,
+    metroDaily: Math.round(metroTrips * 2), metroTrips, carKmPerCommuter: carTrips ? carKm / carTrips : 0, carKm,
     zoneAgreement, meanLandValue: B.length ? landValue.reduce((s, x) => s + x, 0) / B.length : 0,
   };
   const checks = [];

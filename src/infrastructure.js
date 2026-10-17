@@ -115,17 +115,18 @@ class PointHash {
 export function dijkstra(graph, sources, weight = (e) => e.len) {
   const n = graph.nodes.length;
   const d = new Float64Array(n).fill(Infinity), parent = new Int32Array(n).fill(-1), pedge = new Int32Array(n).fill(-1), src = new Int32Array(n).fill(-1);
-  const heap = new Heap();
+  const heap = new Heap(), order = [];
   sources.forEach((s, i) => { d[s] = 0; src[s] = i; heap.push(0, s); });
   while (heap.size) {
     const [dd, u] = heap.pop();
     if (dd > d[u]) continue;
+    order.push(u); // settled in order of distance: parents always precede their children
     for (const ei of graph.adj[u]) {
       const e = graph.edges[ei], v = e.a === u ? e.b : e.a, w = weight(e, u, v);
       if (dd + w < d[v] - 1e-12) { d[v] = dd + w; parent[v] = u; pedge[v] = ei; src[v] = src[u]; heap.push(d[v], v); }
     }
   }
-  return { d, parent, pedge, src };
+  return { d, parent, pedge, src, order };
 }
 // Nodes ordered leaves-first (decreasing distance) so loads can be accumulated toward the sources.
 const leavesFirst = (d) => Array.from(d.keys()).filter((i) => Number.isFinite(d[i])).sort((a, b) => d[b] - d[a] || a - b);

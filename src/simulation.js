@@ -321,7 +321,7 @@ export function flows(layout, infra, hour = 8, opts = {}) {
   const sewer = { pipes: pipesOut, surcharged, maxFullness, totalFlow: infra.sewer.plants.reduce((s, p) => s + p.flowM3Day, 0) / 86400 * PROFILES.sewage[h] };
 
   // ---- metro: gravity-model commuting between station catchments, assigned to the tunnel tree
-  const transit = metroFlows(layout, infra, h, opts.modeShare ?? GROWTH.modeShare);
+  const transit = metroFlows(layout, infra, h, opts.modeShare ?? GROWTH.modeShare, opts.metroTrips ?? null);
 
   const flags = [];
   if (water.criticalNodes) flags.push(`${water.criticalNodes} nodes below 140 kPa`); else if (water.lowNodes) flags.push(`${water.lowNodes} nodes below 241 kPa`);
@@ -332,7 +332,7 @@ export function flows(layout, infra, hour = 8, opts = {}) {
   return { hour: h, water, power, sewer, transit, flags };
 }
 
-function metroCatchments(layout, infra, modeShare = GROWTH.modeShare) {
+function metroCatchments(layout, infra, modeShare = GROWTH.modeShare, metroTrips = null) {
   const st = infra.transit.stations;
   if (st.length < 2) return null;
   const P = new Float64Array(st.length), A = new Float64Array(st.length), of = new Int32Array(layout.buildings.length).fill(-1);
@@ -368,7 +368,8 @@ function metroCatchments(layout, infra, modeShare = GROWTH.modeShare) {
     T[i][j] = (P[i] * A[j]) / dkm; raw += T[i][j];
   }
   const totalP = P.reduce((s, x) => s + x, 0), totalA = A.reduce((s, x) => s + x, 0);
-  const daily = Math.min(totalP, totalA) * modeShare;
+  // daily one-way commute trips by metro: the assumed share of the catchment commuters, or the ridership the people model earned
+  const daily = metroTrips != null ? metroTrips : Math.min(totalP, totalA) * modeShare;
   const k = raw > 0 ? daily / raw : 0;
   for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) T[i][j] *= k;
   // daily link usage (both directions) for impact analysis
@@ -377,8 +378,8 @@ function metroCatchments(layout, infra, modeShare = GROWTH.modeShare) {
   for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) if (T[i][j] > 0) { for (const [li] of pathLinks(i, j)) linkDaily[li] += 2 * T[i][j]; stationDaily[i] += T[i][j]; stationDaily[j] += T[i][j]; }
   return { P, A, of, T, daily, pathLinks, linkDaily, stationDaily, nodeStation };
 }
-function metroFlows(layout, infra, h, modeShare = GROWTH.modeShare) {
-  const cm = metroCatchments(layout, infra, modeShare); // the people model can supply the share it earned
+function metroFlows(layout, infra, h, modeShare = GROWTH.modeShare, metroTrips = null) {
+  const cm = metroCatchments(layout, infra, modeShare, metroTrips); // the people model can supply the share it earned
   const tunnels = infra.transit.tunnels;
   if (!cm) return { links: [], stations: [], dailyTrips: 0, hourTrips: 0, maxLoadFactor: 0 };
   const share = PROFILES.rail[h], hourTrips = cm.daily * share, am = h < 13;
