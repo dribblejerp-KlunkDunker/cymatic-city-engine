@@ -112,7 +112,7 @@ class PointHash {
   }
 }
 // Dijkstra from several sources; returns distance, parent node (toward the source), parent edge and source id.
-function dijkstra(graph, sources, weight = (e) => e.len) {
+export function dijkstra(graph, sources, weight = (e) => e.len) {
   const n = graph.nodes.length;
   const d = new Float64Array(n).fill(Infinity), parent = new Int32Array(n).fill(-1), pedge = new Int32Array(n).fill(-1), src = new Int32Array(n).fill(-1);
   const heap = new Heap();

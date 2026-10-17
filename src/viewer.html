@@ -349,6 +349,17 @@ textarea { font: 400 var(--step--1)/1.3 var(--mono); resize: vertical; }
         <label class="check" for="flows-on"><input type="checkbox" id="flows-on"><span>Colour the networks by load at this hour (pressure, voltage, fullness, crowding)</span></label>
         <div class="stats" id="flow-stats"></div>
         <ul class="checks" id="flow-flags"></ul>
+        <h2>People, traffic, land</h2>
+        <div class="inline">
+          <button class="primary" id="people-run">Run people and traffic</button>
+          <span class="hint" id="people-progress"></span>
+        </div>
+        <p class="hint">A commuting population drawn from the buildings' residents and jobs chooses workplaces by a gravity model on street distance, walks, rides or drives by door-to-door time, and the cars are assigned to the streets with congestion. Land value follows accessibility, amplitude and the metro.</p>
+        <div class="stats" id="people-stats"></div>
+        <ul class="checks" id="people-checks"></ul>
+        <label class="field" for="paint">Colour the city by
+          <select id="paint"><option value="none">The pattern (default)</option><option value="traffic">Street traffic at the peak (v/c)</option><option value="value">Land value</option><option value="zoning">Zoning the market would produce</option></select>
+        </label>
         <h2>Resilience (N-1)</h2>
         <div class="stats" id="resilience"></div>
         <p class="hint">Worst single failure per network as the share of people (or trips) it cuts off. Click an asset in the view and press Fail to try any other.</p>
@@ -527,6 +538,13 @@ self.onmessage = (e) => {
       self.postMessage({ id, gen, ok: true, sim: { years: SIM.years, founding: SIM.founding, events: SIM.events, keyframes: SIM.keyframes.map((x) => ({ year: x.year, stats: x.stats, infraStats: x.infra.stats })) } });
     }
     else if (type === "keyframe") { if (!SIM) throw new Error("The simulation belongs to an earlier city"); const K = SIM.keyframes[k]; self.postMessage({ id, gen, ok: true, L: strip(K.layout), R: resilience(K.layout, K.infra), k }); }
+    else if (type === "people") {
+      const target = k != null && SIM ? SIM.keyframes[k].layout : CITY;
+      if (!target) throw new Error("No city yet");
+      let last = 0;
+      const P = people(target, target.infra, { onProgress: (it, i, n) => { if (Date.now() - last > 150) { last = Date.now(); self.postMessage({ id, gen, progress: i, of: n, it }); } } });
+      self.postMessage({ id, gen, ok: true, P });
+    }
     else throw new Error("Unknown request " + type);
   } catch (err) { self.postMessage({ id, gen: e.data.gen, ok: false, error: String(err && err.message || err) }); }
 };`;
@@ -534,7 +552,7 @@ self.onmessage = (e) => {
   worker.onmessage = (e) => {
     const d = e.data, job = pending.get(d.id);
     if (!job) return;
-    if (d.progress != null) { job.onProgress?.(d.progress, d.of); return; }
+    if (d.progress != null) { job.onProgress?.(d.progress, d.of, d.it); return; }
     pending.delete(d.id);
     d.ok ? job.resolve(d) : job.reject(new Error(d.error));
   };
@@ -551,6 +569,7 @@ function ask(type, payload, onProgress) {
       if (type === "generate") { LOCAL.city = generateCity(payload.p); LOCAL.city.infra = buildInfrastructure(LOCAL.city); LOCAL.sim = null; resolve({ id, gen, L: strip(LOCAL.city), R: resilience(LOCAL.city, LOCAL.city.infra) }); }
       else if (type === "simulate") { if (!LOCAL.city) throw new Error("No city to simulate yet"); LOCAL.sim = simulate(LOCAL.city, { years: payload.years, keyframes: payload.keyframes, onKeyframe: (i, K) => onProgress?.(i + 1, K) }); resolve({ id, gen, sim: { years: LOCAL.sim.years, founding: LOCAL.sim.founding, events: LOCAL.sim.events, keyframes: LOCAL.sim.keyframes.map((x) => ({ year: x.year, stats: x.stats, infraStats: x.infra.stats })) } }); }
       else if (type === "keyframe") { if (!LOCAL.sim) throw new Error("The simulation belongs to an earlier city"); const K = LOCAL.sim.keyframes[payload.k]; resolve({ id, gen, L: strip(K.layout), R: resilience(K.layout, K.infra), k: payload.k }); }
+      else if (type === "people") { const target = payload.k != null && LOCAL.sim ? LOCAL.sim.keyframes[payload.k].layout : LOCAL.city; if (!target) throw new Error("No city yet"); resolve({ id, gen, P: people(target, target.infra, { onProgress: (it, i, n) => onProgress?.(i, n, it) }) }); }
       else throw new Error("Unknown request " + type);
     } catch (err) { reject(err); }
   }, 30));
@@ -706,6 +725,7 @@ function show(L) {
   layout = L;
   buildingInstance = [];
   currentFlows = null; currentImpact = null; $("impact").hidden = true;
+  peopleResult = null; roadEdges = null; $("people-stats").replaceChildren(); $("people-checks").replaceChildren(); $("people-progress").textContent = ""; $("people-run").disabled = false;
   L.infraToOBJ = infraToOBJ; // the worker cannot send functions; the exporter needs this hook
   $("busy").hidden = true; $("pick").hidden = true; selected = null;
   // paint the plate from the settings this city was built with, not whatever the sliders say now
@@ -1218,13 +1238,16 @@ function describe(kind, r, L) {
         ["Height", `${fmt(r.h, 0)} m`], ["Floors", r.floors], ["Footprint", `${fmt(r.w, 0)} × ${fmt(r.d, 0)} m`], ["Slenderness", `1:${fmt(r.h / Math.min(r.w, r.d))}`],
         ["Foundations", `${fmt(foundationDepth(r))} m deep`], ...(r.elevation != null ? [["Ground", `${fmt(r.elevation)} m`]] : []), ["Amplitude", fmt(r.amp, 2)], ["Phase", r.polarity > 0 ? "+" : "−"],
         ...(lat ? [["Residents", Math.round(lat.residents)], ["Jobs", Math.round(lat.jobs)], ["Service line", `${fmt(lat.length, 0)} m to street node ${lat.node}`]] : []),
+        ...(peopleResult ? (() => { const bi = L.buildings.indexOf(r); return bi < 0 ? [] : [["Land value", `${Math.round(100 * peopleResult.landValue[bi])} / 100`], ["Access to jobs", lat ? `${Math.round(100 * peopleResult.access[lat.node])} / 100` : "—"], ["Market zoning", peopleResult.emergentZone[bi] + (peopleResult.emergentZone[bi] === r.zone ? "" : ` (the wave says ${r.zone})`)]]; })() : []),
       ] };
     }
     case "road": {
       const planLen = L.meta.plate === "sphere" ? dist3(r.a, r.b) : Math.hypot(r.b[0] - r.a[0], r.b[2] - r.a[2]);
       const rise = L.meta.plate === "sphere" ? Math.hypot(...r.b) - Math.hypot(...r.a) : r.b[1] - r.a[1];
       const grade = planLen > 0 && L.meta.terrain?.mode !== "flat" ? [["Grade", `${fmt(100 * Math.abs(rise) / planLen, 1)} %`]] : [];
-      return { title: `${r.bridge ? "Bridge · " : ""}${r.kind[0].toUpperCase()}${r.kind.slice(1)} street`, color: ROAD[r.kind], pos: r.a, size: r.w * 4, rows: [["Width", `${fmt(r.w)} m`], ["Segment", `${fmt(dist3(r.a, r.b))} m`], ...grade, ...(r.bridge ? [["Deck", `${fmt(L.meta.terrain.waterLevel + L.meta.terrain.freeboard)} m, ${fmt(L.meta.terrain.freeboard)} m above the water`]] : [])] };
+      const tr = peopleResult ? roadTraffic(L.roads.indexOf(r)) : null;
+      const traffic = tr ? [["Peak flow", `${Math.round(tr.flow)} veh/h both ways`], ["Load", `${Math.round(100 * tr.vc)} % of capacity · ${tr.speed.toFixed(0)} km/h`], ["Lanes", `${tr.lanes} (${tr.lanesNeeded} needed)`]] : [];
+      return { title: `${r.bridge ? "Bridge · " : ""}${r.kind[0].toUpperCase()}${r.kind.slice(1)} street`, color: ROAD[r.kind], pos: r.a, size: r.w * 4, rows: [["Width", `${fmt(r.w)} m`], ["Segment", `${fmt(dist3(r.a, r.b))} m`], ...grade, ...(r.bridge ? [["Deck", `${fmt(L.meta.terrain.waterLevel + L.meta.terrain.freeboard)} m, ${fmt(L.meta.terrain.freeboard)} m above the water`]] : []), ...traffic] };
     }
     case "sewer": return { title: r.forceMain ? `${themeName("sewer", "Sewer")} · force main (pumped)` : themeName("sewer", "Gravity sewer"), color: NET.sewer.color, pos: nodes[r.up].pos, depth: r.upDepth, size: 20, rows: [
       ["Diameter", `${Math.round(r.diameter * 1000)} mm`], ["Slope", `${(r.slope * 100).toFixed(2)} % (min ${(sewerMinSlope(r.diameter, g) * 100).toFixed(2)} %)`],
@@ -1381,7 +1404,7 @@ function applyFlows() {
   $("hour-label").textContent = hourLabel(h);
   const on = $("flows-on").checked;
   if (!on) { currentFlows = null; restoreColors(["water", "power", "sewer", "transit", "substation"]); $("flow-stats").replaceChildren(); $("flow-flags").replaceChildren(); invalidate(); return; }
-  currentFlows = flows(layout, layout.infra, h);
+  currentFlows = flows(layout, layout.infra, h, peopleResult ? { modeShare: peopleResult.stats.modeShare.metro } : {});
   const F = currentFlows, I = layout.infra;
   const byEdge = (arr) => { const m = new Map(); for (const x of arr) m.set(x.edge, x); return m; };
   const fw = byEdge(F.water.mains), fp = byEdge(F.power.feeders), fs = byEdge(F.sewer.pipes), ft = byEdge(F.transit.links);
@@ -1416,6 +1439,89 @@ function applyFlows() {
 }
 $("hour").addEventListener("input", scheduleFlows);
 $("flows-on").addEventListener("change", applyFlows);
+
+// ------------------------------------------------------------ people, traffic and land value
+let peopleResult = null, roadEdges = null;
+// road segments are split into graph edges at junctions: find, for each drawn road, the edges that lie on it
+function mapRoadsToEdges(L) {
+  const G = L.infra.graph, cell = 60, hash = new Map();
+  const key = (x, z) => `${Math.floor(x / cell)},${Math.floor(z / cell)}`;
+  G.edges.forEach((e, i) => { const A = G.nodes[e.a].pos, B = G.nodes[e.b].pos; const k = key((A[0] + B[0]) / 2, (A[2] + B[2]) / 2); (hash.get(k) ?? hash.set(k, []).get(k)).push(i); });
+  return L.roads.map((r) => {
+    const out = [], ax = r.a[0], az = r.a[2], dx = r.b[0] - ax, dz = r.b[2] - az, L2 = dx * dx + dz * dz || 1e-9;
+    const x0 = Math.floor(Math.min(r.a[0], r.b[0]) / cell) - 1, x1 = Math.floor(Math.max(r.a[0], r.b[0]) / cell) + 1, z0 = Math.floor(Math.min(r.a[2], r.b[2]) / cell) - 1, z1 = Math.floor(Math.max(r.a[2], r.b[2]) / cell) + 1;
+    for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) for (const i of hash.get(`${x},${z}`) ?? []) {
+      const e = G.edges[i], A = G.nodes[e.a].pos, B = G.nodes[e.b].pos, mx = (A[0] + B[0]) / 2, mz = (A[2] + B[2]) / 2;
+      const t = ((mx - ax) * dx + (mz - az) * dz) / L2; if (t < -0.02 || t > 1.02) continue;
+      const px = ax + t * dx, pz = az + t * dz; if (Math.hypot(mx - px, mz - pz) > 1.0) continue;
+      out.push(i);
+    }
+    return out;
+  });
+}
+const roadTraffic = (ri) => { // the busiest edge on a drawn road segment
+  if (!peopleResult || !roadEdges || ri < 0) return null;
+  let best = -1; for (const i of roadEdges[ri] ?? []) if (best < 0 || peopleResult.traffic.vc[i] > peopleResult.traffic.vc[best]) best = i;
+  if (best < 0) return null;
+  const T = peopleResult.traffic; return { flow: T.edgeFlow[best], vc: T.vc[best], speed: T.speedKmh[best], lanes: T.lanes[best], lanesNeeded: T.lanesNeeded[best] };
+};
+const valueColor = new THREE.Color(), valueLo = new THREE.Color("#2f3a40"), valueHi = new THREE.Color("#ffd27a"), disagree = new THREE.Color("#e36b5e");
+const ZONE_COLOR = { core: "#ffb347", mixed: "#d9c27a", residential: "#7fa6b8", green: "#4d8a4a" };
+function applyPaint() {
+  const mode = $("paint").value;
+  if (!layout || !peopleResult || mode === "none") { restoreColors(["road", "building"]); invalidate(); return; }
+  for (const m of pickTargets) {
+    const kind = m.userData.kind;
+    if (kind === "road") {
+      ensureInstanceColor(m);
+      if (mode === "traffic") layout.roads.forEach((r, i) => { const t = roadTraffic(i); m.setColorAt(i, utilColor(ROAD[r.kind] ?? "#999", t ? t.vc : 0)); });
+      else m.instanceColor.array.set(m.userData.baseColors);
+      m.instanceColor.needsUpdate = true;
+    } else if (kind === "building") {
+      ensureInstanceColor(m);
+      const idx = m.userData.index;
+      if (mode === "value") idx.forEach((bi, j) => m.setColorAt(j, valueColor.copy(valueLo).lerp(valueHi, Math.pow(peopleResult.landValue[bi], 0.8))));
+      else if (mode === "zoning") idx.forEach((bi, j) => { const z = peopleResult.emergentZone[bi]; valueColor.set(ZONE_COLOR[z] ?? "#888"); if (z !== layout.buildings[bi].zone) valueColor.lerp(disagree, 0.45); m.setColorAt(j, valueColor); });
+      else m.instanceColor.array.set(m.userData.baseColors);
+      m.instanceColor.needsUpdate = true;
+    }
+  }
+  invalidate();
+}
+$("paint").addEventListener("change", applyPaint);
+function renderPeople(P) {
+  const s = P.stats, ms = s.modeShare;
+  const tiles = [
+    ["Commuters", fmtInt(s.commuters), ""], ["Mean commute", `${s.meanTripKm.toFixed(1)} km · ${s.meanTripMin.toFixed(0)} min`, s.meanTripMin > 45 ? "warn" : "ok"],
+    ["Walk · metro · car", `${Math.round(100 * ms.walk)} · ${Math.round(100 * ms.metro)} · ${Math.round(100 * ms.car)} %`, ""], ["Cars in the peak hour", fmtInt(s.peakVehicles), ""],
+    ["Streets over capacity", `${s.congestedKm.toFixed(1)} of ${s.streetKm.toFixed(0)} km`, s.congestedKm > 0.1 * s.streetKm ? "bad" : s.congestedKm > 0 ? "warn" : "ok"], ["Busiest street", `${Math.round(100 * s.maxVC)} % v/c`, s.maxVC > 1 ? "bad" : s.maxVC > 0.85 ? "warn" : "ok"],
+    ["Metro riders / day", fmtInt(s.metroDaily), ""], ["Market zoning agrees", `${Math.round(100 * s.zoneAgreement)} %`, ""],
+  ];
+  $("people-stats").replaceChildren(...tiles.map(([k, v, cls]) => { const d = document.createElement("div"); d.className = "stat"; const a = document.createElement("span"); a.textContent = k; const b = document.createElement("b"); b.textContent = v; if (cls) b.className = cls; d.append(a, b); return d; }));
+  $("people-checks").replaceChildren(...P.checks.map((c) => {
+    const li = document.createElement("li");
+    const pill = document.createElement("span"); pill.className = `pill ${c.status}`; pill.textContent = c.status === "pass" ? "ok" : c.status;
+    const label = document.createElement("span"); label.textContent = c.label;
+    const val = document.createElement("span"); val.className = "val"; val.textContent = c.value;
+    const basis = document.createElement("span"); basis.className = "basis"; basis.textContent = c.basis;
+    li.append(pill, label, val, basis); return li;
+  }));
+}
+$("people-run").addEventListener("click", async () => {
+  if (!layout?.infra) return;
+  $("people-run").disabled = true; $("people-progress").textContent = "Drawing the population…";
+  const k = currentKeyframe >= 0 ? currentKeyframe : null;
+  try {
+    const r = await ask("people", { k }, (i, n, it) => { $("people-progress").textContent = `Assigning trips: pass ${it}, origin ${i} of ${n}`; });
+    if (r.gen !== genSeq) return;
+    peopleResult = r.P; roadEdges = mapRoadsToEdges(layout);
+    renderPeople(peopleResult); $("people-progress").textContent = `${(peopleResult.timingMs / 1000).toFixed(1)} s`;
+    if ($("paint").value === "none") $("paint").value = "traffic";
+    applyPaint();
+    if ($("flows-on").checked) applyFlows(); // the metro share it earned replaces the assumed one
+  } catch (err) { $("people-progress").textContent = String(err.message || err); }
+  finally { $("people-run").disabled = false; }
+});
 
 // ------------------------------------------------------------ simulation: failures and resilience
 function showImpact(asset) {
@@ -1503,10 +1609,11 @@ $("save-model").addEventListener("click", () => {
     `city.obj: Wavefront OBJ in metres, y up. One object per building (prisms) and per road segment (flat strips); the networks follow as line objects (sewer_pipes, water_mains, power_feeders, power_transmission, transit_tunnels, utility_tunnels) at their true depths.`,
     `layout.json: every road segment, building (position, up, forward, width, depth, height, floors, zone, phase) and tree, plus stats and checks, and "infra": the street graph (nodes, edges), service laterals, sewer pipes (diameter, slope, depths, flow), lift stations, treatment plants, water mains and tanks, power plant, substations, feeders and transmission, metro stations and tunnels, utility tunnels.`,
     `profile.json: the exact settings (and theme) that made this city; paste it into the engine's "Apply pasted profile" box or pass it to generateCity().`,
-    `simulation.json (when simulated): growth events and per-keyframe stats; flows-HHMM.json (when flows are on): pressures, voltages, fullness and metro loads for that hour.`,
+    `simulation.json (when simulated): growth events and per-keyframe stats; flows-HHMM.json (when flows are on): pressures, voltages, fullness and metro loads for that hour; people.json (when run): peak-hour flow, v/c, speed and lanes per street-graph edge, accessibility per node, land value and market zoning per building, trip statistics.`,
     `Same settings + same seed reproduce this layout exactly.`].join("\n");
   const files = [{ name: "city.obj", text: toOBJ(layout) }, { name: "layout.json", text: toJSON(layout) }, { name: "profile.json", text: JSON.stringify(profileOf(), null, 2) }, { name: "README.txt", text: readme }];
   if (sim) files.push({ name: "simulation.json", text: JSON.stringify(sim, null, 1) });
+  if (peopleResult) files.push({ name: "people.json", text: JSON.stringify(peopleResult, (k, v) => (ArrayBuffer.isView(v) ? Array.from(v) : v)) });
   if (currentFlows) files.push({ name: `flows-${hourLabel(currentFlows.hour).replace(":", "")}.json`, text: JSON.stringify({ ...currentFlows, water: { ...currentFlows.water, nodePressure: Array.from(currentFlows.water.nodePressure) }, power: { ...currentFlows.power, nodeVoltage: Array.from(currentFlows.power.nodeVoltage) } }) });
   const zip = zipStore(files);
   offer(`${baseName()}.zip`, new Blob([zip]));
@@ -1518,7 +1625,7 @@ $("save-png").addEventListener("click", () => {
 });
 
 // small debugging hook: window.cymatic.layout / camera / controls
-window.cymatic = { get layout() { return layout; }, get sim() { return sim; }, get flows() { return currentFlows; }, camera, controls, invalidate, focusOn, profile: profileOf, applyProfile, showKeyframe, showImpact };
+window.cymatic = { get layout() { return layout; }, get sim() { return sim; }, get flows() { return currentFlows; }, get people() { return peopleResult; }, camera, controls, invalidate, focusOn, profile: profileOf, applyProfile, showKeyframe, showImpact };
 applyTheme();
 regenerate(0);
 </script>
