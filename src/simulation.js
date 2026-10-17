@@ -119,8 +119,11 @@ export function simulate(layout, opts = {}) {
 
   // founding nucleus: the strongest antinode nearest the drive point
   const dp = drivePointWorld(meta), E = meta.world.extent;
+  // in a chord the first voice is the old city: the nucleus is drawn from it and later voices settle after it
+  const chord = Array.isArray(layout.meta.chord) && layout.meta.chord.length > 1;
+  const eraOf = (b) => (chord ? b.era ?? 0 : 0);
   let fb = 0, fs = -Infinity;
-  layout.buildings.forEach((b, i) => { const s = b.amp - dist(b.pos, dp) / E + (b.landmark ? 0.3 : 0); if (s > fs) { fs = s; fb = i; } });
+  layout.buildings.forEach((b, i) => { const s = b.amp - dist(b.pos, dp) / E + (b.landmark ? 0.3 : 0) - (eraOf(b) ? 10 : 0); if (s > fs) { fs = s; fb = i; } });
   const nodeOf = new Int32Array(layout.buildings.length).fill(-1);
   for (const l of infra.laterals) nodeOf[l.building] = l.node;
   const founding = nodeOf[fb] >= 0 ? nodeOf[fb] : infra.laterals[0]?.node ?? 0;
@@ -129,7 +132,7 @@ export function simulate(layout, opts = {}) {
   // settlement order: street distance from the nucleus, pulled earlier by amplitude, with a little noise
   const score = layout.buildings.map((b, i) => {
     const dd = Number.isFinite(dist0[nodeOf[i]]) ? dist0[nodeOf[i]] : 4 * E;
-    return { i, s: (dd + 15) * (1.3 - 0.6 * b.amp) * (1 + 0.25 * (rng() - 0.5)), distance: dd };
+    return { i, s: eraOf(b) * 1e9 + (dd + 15) * (1.3 - 0.6 * b.amp) * (1 + 0.25 * (rng() - 0.5)), distance: dd };
   }).sort((x, y) => x.s - y.s || x.i - y.i);
   const r = GROWTH.rate, denom = Math.exp(r * years) - 1;
   const history = new Array(layout.buildings.length);
@@ -210,7 +213,13 @@ export function simulate(layout, opts = {}) {
       note: describeKeyframe(k, built, replaced, inf.stats, prevStats) });
     prevStats = inf.stats;
   }
-  return { years, founding: { building: fb, node: founding }, history, keyframes, events };
+  // when each voice of a chord broke ground
+  let eraStarts = null;
+  if (chord) {
+    eraStarts = layout.meta.chord.map((v, e) => { let first = Infinity; history.forEach((h) => { if (eraOf(layout.buildings[h.building]) === e) first = Math.min(first, h.built); }); return { era: e, hz: v.hz, year: Number.isFinite(first) ? first : null }; });
+    for (const ev of events) for (const es of eraStarts) if (es.year != null && es.era > 0 && es.year <= ev.year && es.year > (events[events.indexOf(ev) - 1]?.year ?? -1)) ev.note += `, voice ${es.era + 1} (${Math.round(es.hz)} Hz) breaks ground`;
+  }
+  return { years, founding: { building: fb, node: founding }, history, keyframes, events, eraStarts };
 }
 function describeKeyframe(k, built, replaced, s, prev) {
   const bits = [`${built} built`];

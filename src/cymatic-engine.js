@@ -247,6 +247,49 @@ function makeField(plate, active) {
   };
 }
 
+// A chord's field. Each voice is driven on its own and normalised to its own peak (sampleGrid sets the scale).
+// The amplitude is the time-averaged motion √Σ (w·A_v)², which is what sand on a plate driven by two incommensurate
+// tones responds to; the signed field keeps the sign of the in-phase superposition Σ w·S_v (the plate's shape when
+// the voices align), clipped to that envelope where the snapshot would exceed it. Q is chosen so that hypot(S, Q)
+// is the amplitude, so the grid sampler needs no special case.
+function makeChordField(voices) {
+  let k = 1;
+  function raw(u, v) {
+    let S = 0, E = 0;
+    for (const { field, weight } of voices) { const { S: sv, A: av } = field.at(u, v); S += weight * sv; E += weight * weight * av * av; }
+    const env = Math.sqrt(E);
+    if (Math.abs(S) > env) S = Math.sign(S) * env;
+    return [S, Math.sqrt(Math.max(0, E - S * S))];
+  }
+  return {
+    raw,
+    setScale(s) { k = s; },
+    at(u, v) { const [S, Qd] = raw(u, v); return { S: S * k, A: Math.hypot(S, Qd) * k }; },
+    S(u, v) { return raw(u, v)[0] * k; },
+    voices,
+  };
+}
+// Resolve the field(s) for a parameter set: one voice or a chord.
+function resolveFields(p) {
+  const modes = enumerateModes(p);
+  if (!p.chord) {
+    const resp = drivenResponse(modes, p.frequency, p.Q);
+    return { field: makeField(p.plate, resp.active), resp, voices: null };
+  }
+  const dom = makeDomain(p);
+  const voices = p.chord.map(({ hz, weight }) => {
+    const resp = drivenResponse(modes, hz, p.Q);
+    const field = makeField(p.plate, resp.active);
+    const grid = sampleGrid(dom, field); // normalises the voice to its own peak
+    return { hz, weight, resp, field, grid };
+  });
+  const field = makeChordField(voices);
+  // the chord's sharpness is the weighted mean of its voices'
+  const wsum = voices.reduce((s, v) => s + v.weight, 0);
+  const resp = { active: voices[0].resp.active, psi: voices[0].resp.psi, sharpness: voices.reduce((s, v) => s + v.weight * v.resp.sharpness, 0) / wsum };
+  return { field, resp, voices };
+}
+
 // ---------------------------------------------------------------- presets and materials
 export const MATERIALS = {
   masonry: { label: 'Load-bearing masonry', sigma: 10e6, rho: 2000 },
@@ -347,19 +390,33 @@ export function resolveParams(input = {}) {
   const num = (v, name) => { const x = Number(v); if (!Number.isFinite(x)) throw new Error(`${name} must be a number`); return x; };
   const fundamentalHz = num(input.fundamentalHz ?? PLATES[plate].defaultFundamental, 'Lowest-mode frequency');
   if (fundamentalHz <= 0) throw new Error('Lowest-mode frequency must be above 0 Hz');
-  const frequency = num(input.frequency ?? 432, 'Frequency');
-  if (!(frequency > 0)) throw new Error('Frequency must be a positive number of hertz');
   const [lo, hi] = frequencyRange(plate, fundamentalHz);
-  if (frequency < lo - 0.01 || frequency > hi + 0.01) {
-    throw new Error(`${frequency} Hz is outside this plate's modelled range (${lo.toFixed(1)}–${hi.toFixed(1)} Hz). Change the lowest-mode frequency to move the range.`);
+  const checkHz = (f, name) => {
+    if (!(f > 0)) throw new Error(`${name} must be a positive number of hertz`);
+    if (f < lo - 0.01 || f > hi + 0.01) throw new Error(`${f} Hz is outside this plate's modelled range (${lo.toFixed(1)}–${hi.toFixed(1)} Hz). Change the lowest-mode frequency to move the range.`);
+    return clamp(f, lo, hi);
+  };
+  // a chord: two or three drive frequencies sounding together; the first voice is the frequency the city is named for
+  let chord = null;
+  if (input.chord != null) {
+    if (!Array.isArray(input.chord) || input.chord.length < 1 || input.chord.length > MAX_VOICES) throw new Error(`A chord is a list of 1 to ${MAX_VOICES} frequencies`);
+    chord = input.chord.map((v, i) => {
+      const hz = num(typeof v === 'object' && v !== null ? v.hz : v, `Voice ${i + 1}`);
+      const weight = typeof v === 'object' && v !== null && v.weight != null ? num(v.weight, `Voice ${i + 1} weight`) : 1;
+      if (!(weight > 0) || weight > 1) throw new Error(`Voice ${i + 1} weight must be between 0 and 1`);
+      return { hz: checkHz(hz, `Voice ${i + 1}`), weight };
+    });
   }
+  let frequency;
+  if (chord && chord.length === 1) { frequency = chord[0].hz; chord = null; } // a chord of one is the plain frequency
+  else frequency = chord ? chord[0].hz : checkHz(num(input.frequency ?? 432, 'Frequency'), 'Frequency');
   const driveOffset = num(input.driveOffset ?? (plate === 'square' ? 0 : 0.37), 'Drive point');
   if (driveOffset < 0 || driveOffset > 0.95) throw new Error('Drive point must be between 0 (centre) and 0.95 (near the edge)');
   const az = input.azimuthal ?? 'auto';
   if (az !== 'auto' && !(Number.isInteger(az) && az >= 0)) throw new Error('Sphere meridian count must be "auto" or a whole number ≥ 0');
   const material = resolveMaterial(input.material ?? preset.material, preset.custom ? 'concrete' : preset.material);
   return {
-    frequency: clamp(frequency, lo, hi), plate, presetKey, preset, fundamentalHz, driveOffset, azimuthal: az,
+    frequency, plate, presetKey, preset, fundamentalHz, driveOffset, azimuthal: az,
     seed: (input.seed ?? 1) >>> 0,
     Q: clamp(num(input.Q ?? 100, 'Q'), 2, 1000),
     gravity: clamp(num(input.gravity ?? preset.gravity, 'Gravity'), 0.05, 5),
@@ -368,8 +425,10 @@ export function resolveParams(input = {}) {
     enforce: input.enforce !== false,
     inverse: !!input.inverse,
     terrain: resolveTerrain(input.terrain),
+    chord,
   };
 }
+export const MAX_VOICES = 3;
 
 // Terrain: flat (default), relief (lobes rise and sink with the wave: hills and basins, basins may flood),
 // valleys (every lobe is a hill, the nodal lines are valleys; optional canals), or an imported heightmap.
@@ -606,8 +665,8 @@ function labelDistricts(g) {
 }
 
 // ---------------------------------------------------------------- roads
-function buildRoads(p, dom, field, g) {
-  const pr = p.preset, roads = [];
+function buildRoads(p, dom, field, g, opts = {}) {
+  const pr = p.preset, roads = [], share = opts.share ?? 1, era = opts.era ?? null, withWall = opts.wall !== false;
   const toWorldGrid = (gi, gj) => { const [u, v] = g.coord(gi, gj); return dom.toWorld(u, v); };
   const gridPoint = (pt) => {
     if (dom.kind === 'plane') {
@@ -622,7 +681,8 @@ function buildRoads(p, dom, field, g) {
     for (const [a, b] of marchingSquares(g, level)) {
       const A = gridPoint(a), B = gridPoint(b), L = len3(sub(B, A));
       if (L < 1e-6) continue;
-      roads.push({ a: A, b: B, w, kind }); total += L;
+      const r = { a: A, b: B, w, kind }; if (era != null) r.era = era;
+      roads.push(r); total += L;
     }
     return total;
   };
@@ -633,7 +693,7 @@ function buildRoads(p, dom, field, g) {
   const wBoulevard = Math.max(6, Math.min(pr.widths.boulevard, nodalSpacing * 0.12));
   addContour(0, 'boulevard', wBoulevard);
 
-  const targetLength = pr.arcology ? 0 : (dom.area * 2) / pr.streetSpacing; // UN-Habitat ≥ 18 km/km² ≈ 2/111 m
+  const targetLength = pr.arcology ? 0 : ((dom.area * 2) / pr.streetSpacing) * share; // UN-Habitat ≥ 18 km/km² ≈ 2/111 m
   let ringLevels = [];
   if (!pr.arcology) {
     // 2. contour rings (major hyperstreamlines along |S| levels)
@@ -648,7 +708,7 @@ function buildRoads(p, dom, field, g) {
   }
 
   // 3. perimeter road / wall
-  if (dom.kind === 'plane') {
+  if (dom.kind === 'plane' && withWall) {
     const pts = [];
     if (dom.shape === 'circle') {
       const r = 0.985, steps = Math.ceil((TAU * dom.scale) / 30);
@@ -662,7 +722,7 @@ function buildRoads(p, dom, field, g) {
       }
       pts.push(pts[0]);
     }
-    for (let i = 1; i < pts.length; i++) roads.push({ a: pts[i - 1], b: pts[i], w: pr.widths.wall, kind: 'wall' });
+    for (let i = 1; i < pts.length; i++) { const r = { a: pts[i - 1], b: pts[i], w: pr.widths.wall, kind: 'wall' }; if (era != null) r.era = era; roads.push(r); }
   }
   // 4. gradient spokes (minor hyperstreamlines) toward the antinodes, seeded on the nodal lines first,
   //    then on the rings and the wall, so low modes with no interior nodal line still get connected streets
@@ -675,6 +735,7 @@ function buildRoads(p, dom, field, g) {
     let spokes = [];
     for (let iter = 0; iter < 5; iter++) {
       spokes = traceSpokes(dom, field, seeds, dsep, pr);
+      if (era != null) for (const r of spokes) r.era = era;
       const total = base.reduce((s, r) => s + len3(sub(r.b, r.a)), 0) + spokes.reduce((s, r) => s + len3(sub(r.b, r.a)), 0);
       spokeSpacing = dsep;
       if (total >= targetLength) break;
@@ -938,13 +999,22 @@ export function generateCity(input = {}) {
   const t0 = Date.now();
   const p = resolveParams(input);
   const pr = p.preset;
-  const modes = enumerateModes(p);
-  const resp = drivenResponse(modes, p.frequency, p.Q);
-  const field = makeField(p.plate, resp.active);
+  const { field, resp, voices } = resolveFields(p);
   const dom = makeDomain(p);
   const grid = sampleGrid(dom, field);
   const districts = labelDistricts(grid);
-  const rd = buildRoads(p, dom, field, grid);
+  let rd;
+  if (!voices) rd = buildRoads(p, dom, field, grid);
+  else {
+    // each voice lays its own streets (nodal boulevards, rings, spokes) as one era of the city, sharing the street
+    // budget in proportion to its weight; the first voice also closes the perimeter
+    const wsum = voices.reduce((s, v) => s + v.weight, 0);
+    const parts = voices.map((v, i) => buildRoads(p, dom, v.field, v.grid, { share: v.weight / wsum, era: i, wall: i === 0 }));
+    rd = { ...parts[0], roads: parts.flatMap((x) => x.roads), targetLength: parts.reduce((s, x) => s + x.targetLength, 0) };
+    rd.nodalSpacing = Math.min(...parts.map((x) => x.nodalSpacing));
+  }
+  // which voice built a lot: the one that moves the plate most there
+  const eraAt = voices ? (u, v) => { let best = 0, bv = -1; voices.forEach((vc, i) => { const a = vc.weight * vc.field.at(u, v).A; if (a > bv) { bv = a; best = i; } }); return best; } : null;
   const maxW = Math.max(...Object.values(pr.widths));
   const access = pr.arcology ? Infinity : pr.streetSpacing * 0.8; // every building within reach of a street
   const planar = dom.kind === 'plane';
@@ -1016,6 +1086,7 @@ export function generateCity(input = {}) {
       buildings.push({
         pos: P, up, fwd, w: foot, d: foot, h, floors: Math.round(h / pr.floorH), zone: zoneOf(amp),
         shape: 'terrace', polarity: S >= 0 ? 1 : -1, amp, district: districtAt(u, v), landmark: false,
+        ...(eraAt ? { era: eraAt(u, v) } : {}),
       });
     }
     // Terracing: no cell may rise more than `rise` above any neighbour (an open cell counts as 0 m),
@@ -1115,7 +1186,7 @@ export function generateCity(input = {}) {
       if (pr.style === 'town' && zone !== 'core') shape = 'house';
       buildings.push({
         pos: P, up, fwd, w, d, h: 0, floors, zone, shape, polarity: S >= 0 ? 1 : -1, amp,
-        district: districtAt(u, v), landmark: false, hdCell,
+        district: districtAt(u, v), landmark: false, hdCell, ...(eraAt ? { era: eraAt(u, v) } : {}),
       });
       return true;
     };
@@ -1276,6 +1347,7 @@ export function generateCity(input = {}) {
     maxTerraceStep: pr.arcology ? maxTerraceStep(dom, buildings, pr.lot, terrain) : null,
     accessLimit: pr.arcology ? null : access,
     patternSharpness: resp.sharpness,
+    eras: voices ? voices.map((_, i) => buildings.filter((b) => b.era === i).length) : null,
   };
   const checks = plausibilityChecks(p, stats);
   const dominant = resp.active[0];
@@ -1292,6 +1364,7 @@ export function generateCity(input = {}) {
       world: { shape: dom.shape, extent: dom.extent, area: dom.area, Rs: dom.Rs ?? null },
       ringLevels: rd.ringLevels, spokeSpacing: rd.spokeSpacing, boulevardWidth: rd.wBoulevard,
       azimuthal: p.azimuthal, sharpness: resp.sharpness,
+      chord: voices ? voices.map((v) => ({ hz: v.hz, weight: v.weight, note: noteName(v.hz), dominant: modeLabel(v.resp.active[0]), sharpness: v.resp.sharpness, modes: v.resp.active.map((m) => ({ label: modeLabel(m), f: m.f, weight: m.weight, detuneHz: m.detuneHz })) })) : null,
       terrain: { mode: terrain.mode, relief: terrain.relief, waterLevel: Number.isFinite(terrain.waterLevel) ? terrain.waterLevel : null, freeboard: terrain.shore, canals: p.terrain.canals, heightmap: p.terrain.heightmap ? { width: p.terrain.heightmap.width, height: p.terrain.heightmap.height } : null },
     },
     roads: rd.roads,
@@ -1426,8 +1499,7 @@ export function toJSON(layout) {
 // Field only (no city) — for painting the plate under the city and the 2D sand figure.
 export function fieldPreview(input = {}) {
   const p = resolveParams(input);
-  const resp = drivenResponse(enumerateModes(p), p.frequency, p.Q);
-  const field = makeField(p.plate, resp.active);
+  const { field, voices } = resolveFields(p);
   const dom = makeDomain(p);
   const grid = sampleGrid(dom, field);
   // the nodal spacing the city would have (for the automatic relief), from the zero contour length
@@ -1438,6 +1510,7 @@ export function fieldPreview(input = {}) {
     at: field.at, toNorm: dom.toNorm, toWorld: dom.toWorld, inside: dom.inside,
     kind: dom.kind, shape: dom.shape, extent: dom.extent, Rs: dom.Rs ?? null, lo: dom.lo, hi: dom.hi,
     terrain: { mode: terrain.mode, relief: terrain.relief, waterLevel: terrain.waterLevel, shore: terrain.shore, z: terrain.z, lift: terrain.lift, waterAt: terrain.waterAt },
+    voices: voices ? voices.map((v) => ({ hz: v.hz, weight: v.weight, at: v.field.at, S: v.field.S })) : null,
   };
 }
 function gridPt(dom, g, pt) {
