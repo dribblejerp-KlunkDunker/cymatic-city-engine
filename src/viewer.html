@@ -69,6 +69,12 @@ h2 { margin: 12px 0 0; font: 500 var(--step--1)/1 var(--mono); text-transform: u
 
 .freq-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; }
 .freq-row label { grid-column: 1 / -1; font-size: var(--step--1); color: var(--ink-dim); display: flex; justify-content: space-between; }
+.chord { display: grid; gap: 6px; }
+.chord .voice { display: grid; grid-template-columns: auto 1fr auto auto; gap: 8px; align-items: center; font-size: var(--step--1); color: var(--ink-dim); }
+.chord .voice input[type=number] { width: 88px; }
+.chord .voice input[type=range] { grid-column: auto; }
+.chord-add button { padding: 5px 8px; }
+.chord-add { flex-wrap: wrap; }
 input[type=range] { width: 100%; accent-color: var(--brass); grid-column: 1 / 2; }
 input[type=number], select {
   background: var(--plate-2); color: var(--ink); border: 1px solid var(--rule); border-radius: 8px; padding: 6px 8px;
@@ -206,6 +212,16 @@ textarea { font: 400 var(--step--1)/1.3 var(--mono); resize: vertical; }
         <input type="range" id="freq-range" min="0" max="1000" step="1" aria-label="Drive frequency">
         <input type="number" id="freq-num" min="1" step="0.1" aria-label="Frequency in hertz">
         <button id="tone" aria-pressed="false" title="Play the drive tone">Tone</button>
+      </div>
+      <div id="chord" class="chord">
+        <div id="chord-voices"></div>
+        <div class="inline chord-add">
+          <span class="hint">Chord:</span>
+          <button type="button" data-ratio="1.5" title="A perfect fifth above the first voice">+ fifth</button>
+          <button type="button" data-ratio="1.3333333333333333" title="A perfect fourth above">+ fourth</button>
+          <button type="button" data-ratio="1.25" title="A major third above">+ third</button>
+          <button type="button" data-ratio="2" title="An octave above">+ octave</button>
+        </div>
       </div>
       <div class="seg" role="group" aria-label="Settlement type" id="preset-seg">
         <button data-v="town">Town</button><button data-v="city">City</button><button data-v="megastructure">Mega</button><button data-v="alien">Alien</button><button data-v="custom">Custom</button>
@@ -358,7 +374,7 @@ textarea { font: 400 var(--step--1)/1.3 var(--mono); resize: vertical; }
         <div class="stats" id="people-stats"></div>
         <ul class="checks" id="people-checks"></ul>
         <label class="field" for="paint">Colour the city by
-          <select id="paint"><option value="none">The pattern (default)</option><option value="traffic">Street traffic at the peak (v/c)</option><option value="value">Land value</option><option value="zoning">Zoning the market would produce</option></select>
+          <select id="paint"><option value="none">The pattern (default)</option><option value="era">Chord voice (era) that built each street and lot</option><option value="traffic">Street traffic at the peak (v/c)</option><option value="value">Land value</option><option value="zoning">Zoning the market would produce</option></select>
         </label>
         <h2>Resilience (N-1)</h2>
         <div class="stats" id="resilience"></div>
@@ -431,7 +447,8 @@ const $ = (id) => document.getElementById(id);
 const DEFAULTS = { frequency: 432, plate: "circle", preset: "city", seed: 1, Q: 100, inverse: false,
   gravity: null, material: null, fundamentalHz: null, driveOffset: null, azimuthal: null,
   enforce: true, theme: "realistic", custom: { base: "city" }, customMaterial: null,
-  terrain: { mode: "flat", relief: null, waterLevel: null, canals: false } };
+  terrain: { mode: "flat", relief: null, waterLevel: null, canals: false }, voices: [], weight0: 1 };
+// voices: extra chord voices beyond the drive frequency, [{ hz, weight }] (up to MAX_VOICES − 1)
 let heightmapData = null; // { width, height, data: Float32Array, name } — kept in memory, not in the profile
 let params = { ...DEFAULTS };
 try { const s = JSON.parse(localStorage.getItem("cymatic-city-params-v2") || "null"); if (s) params = { ...DEFAULTS, ...s }; } catch {}
@@ -448,6 +465,7 @@ const engineParams = () => {
   if (params.customMaterial) o.material = params.customMaterial;
   o.enforce = params.enforce !== false;
   o.terrain = terrainSpec();
+  if (params.voices?.length) o.chord = [{ hz: params.frequency, weight: params.weight0 ?? 1 }, ...params.voices.slice(0, MAX_VOICES - 1).map((v) => ({ hz: v.hz, weight: v.weight ?? 1 }))];
   return o;
 };
 function terrainSpec() {
@@ -476,6 +494,10 @@ function applyProfile(p) {
   if (!PLATES[n.plate]) throw new Error(`Unknown plate ${n.plate}`);
   if (n.preset !== "custom" && !PRESETS[n.preset]) throw new Error(`Unknown preset ${n.preset}`);
   if (!THEMES[n.theme]) n.theme = "realistic";
+  if (Array.isArray(p.chord) && p.chord.length) {
+    const vs = p.chord.map((v) => (typeof v === "object" && v ? { hz: +v.hz, weight: v.weight == null ? 1 : +v.weight } : { hz: +v, weight: 1 }));
+    n.frequency = vs[0].hz; n.weight0 = Number.isFinite(vs[0].weight) ? Math.min(1, Math.max(0.01, vs[0].weight)) : 1; n.voices = vs.slice(1, MAX_VOICES).filter((v) => Number.isFinite(v.hz) && v.hz > 0);
+  }
   if (p.terrain) {
     const t = typeof p.terrain === "string" ? { mode: p.terrain } : p.terrain;
     n.terrain = { mode: TERRAIN_MODES.includes(t.mode) ? t.mode : "flat", relief: Number.isFinite(+t.relief) && t.relief !== "auto" && t.relief != null ? +t.relief : null, waterLevel: Number.isFinite(+t.waterLevel) && t.waterLevel !== "auto" && t.waterLevel != null ? +t.waterLevel : null, canals: !!t.canals };
@@ -535,7 +557,7 @@ self.onmessage = (e) => {
     else if (type === "simulate") {
       if (!CITY) throw new Error("No city to simulate yet");
       SIM = simulate(CITY, { years, keyframes, onKeyframe: (i, K) => self.postMessage({ id, gen, progress: i + 1, of: K }) });
-      self.postMessage({ id, gen, ok: true, sim: { years: SIM.years, founding: SIM.founding, events: SIM.events, keyframes: SIM.keyframes.map((x) => ({ year: x.year, stats: x.stats, infraStats: x.infra.stats })) } });
+      self.postMessage({ id, gen, ok: true, sim: { years: SIM.years, founding: SIM.founding, events: SIM.events, eraStarts: SIM.eraStarts, keyframes: SIM.keyframes.map((x) => ({ year: x.year, stats: x.stats, infraStats: x.infra.stats })) } });
     }
     else if (type === "keyframe") { if (!SIM) throw new Error("The simulation belongs to an earlier city"); const K = SIM.keyframes[k]; self.postMessage({ id, gen, ok: true, L: strip(K.layout), R: resilience(K.layout, K.infra), k }); }
     else if (type === "people") {
@@ -567,7 +589,7 @@ function ask(type, payload, onProgress) {
     try {
       const strip = (L) => { const o = { ...L }; delete o.field; return o; };
       if (type === "generate") { LOCAL.city = generateCity(payload.p); LOCAL.city.infra = buildInfrastructure(LOCAL.city); LOCAL.sim = null; resolve({ id, gen, L: strip(LOCAL.city), R: resilience(LOCAL.city, LOCAL.city.infra) }); }
-      else if (type === "simulate") { if (!LOCAL.city) throw new Error("No city to simulate yet"); LOCAL.sim = simulate(LOCAL.city, { years: payload.years, keyframes: payload.keyframes, onKeyframe: (i, K) => onProgress?.(i + 1, K) }); resolve({ id, gen, sim: { years: LOCAL.sim.years, founding: LOCAL.sim.founding, events: LOCAL.sim.events, keyframes: LOCAL.sim.keyframes.map((x) => ({ year: x.year, stats: x.stats, infraStats: x.infra.stats })) } }); }
+      else if (type === "simulate") { if (!LOCAL.city) throw new Error("No city to simulate yet"); LOCAL.sim = simulate(LOCAL.city, { years: payload.years, keyframes: payload.keyframes, onKeyframe: (i, K) => onProgress?.(i + 1, K) }); resolve({ id, gen, sim: { years: LOCAL.sim.years, founding: LOCAL.sim.founding, events: LOCAL.sim.events, eraStarts: LOCAL.sim.eraStarts, keyframes: LOCAL.sim.keyframes.map((x) => ({ year: x.year, stats: x.stats, infraStats: x.infra.stats })) } }); }
       else if (type === "keyframe") { if (!LOCAL.sim) throw new Error("The simulation belongs to an earlier city"); const K = LOCAL.sim.keyframes[payload.k]; resolve({ id, gen, L: strip(K.layout), R: resilience(K.layout, K.infra), k: payload.k }); }
       else if (type === "people") { const target = payload.k != null && LOCAL.sim ? LOCAL.sim.keyframes[payload.k].layout : LOCAL.city; if (!target) throw new Error("No city yet"); resolve({ id, gen, P: people(target, target.infra, { onProgress: (it, i, n) => onProgress?.(i, n, it) }) }); }
       else throw new Error("Unknown request " + type);
@@ -725,13 +747,14 @@ function show(L) {
   layout = L;
   buildingInstance = [];
   currentFlows = null; currentImpact = null; $("impact").hidden = true;
-  peopleResult = null; roadEdges = null; peopleLayout = null; $("people-stats").replaceChildren(); $("people-checks").replaceChildren(); $("people-progress").textContent = ""; $("paint").value = "none";
+  peopleResult = null; roadEdges = null; peopleLayout = null; $("people-stats").replaceChildren(); $("people-checks").replaceChildren(); $("people-progress").textContent = "";
+  { const eraOpt = $("paint").querySelector('option[value="era"]'); eraOpt.hidden = eraOpt.disabled = !L.meta.chord; if ($("paint").value !== "era" || !L.meta.chord) $("paint").value = "none"; } // era colouring survives regenerating a chord, and is offered only for one
   L.infraToOBJ = infraToOBJ; // the worker cannot send functions; the exporter needs this hook
   $("busy").hidden = true; $("pick").hidden = true; selected = null;
   // paint the plate from the settings this city was built with, not whatever the sliders say now
   const m0 = L.meta;
   const F = fieldPreview({ frequency: m0.frequency, plate: m0.plate, preset: m0.preset, Q: m0.Q, fundamentalHz: m0.fundamentalHz,
-    driveOffset: m0.driveOffset, azimuthal: m0.azimuthal, gravity: m0.gravity, material: m0.material, terrain: previewTerrain(m0.terrain) });
+    driveOffset: m0.driveOffset, azimuthal: m0.azimuthal, gravity: m0.gravity, material: m0.material, terrain: previewTerrain(m0.terrain), ...(m0.chord ? { chord: m0.chord.map(({ hz, weight }) => ({ hz, weight })) } : {}) }); // the ground and the plate's colours follow the whole chord
   const T = F.terrain, hilly = T.mode !== "flat", waterLevel = Number.isFinite(T.waterLevel) ? T.waterLevel : -Infinity;
   disposeWorld();
   const style = L.meta.presetSpec?.style ?? PRESETS[L.meta.preset]?.style ?? "city";
@@ -903,6 +926,7 @@ function show(L) {
   $("hud-year").hidden = L.meta.year == null;
   if (L.meta.year != null) $("hud-year").textContent = `Year ${L.meta.year} of ${sim?.years ?? L.meta.year}`;
   for (const m of pickTargets) if (m.instanceColor) m.userData.baseColors = m.instanceColor.array.slice();
+  if ($("paint").value === "era") applyPaint(); // era colours need no people run, so they survive a regeneration
   if ($("flows-on").checked) applyFlows();
   updateResilience(L, L.resilience);
   invalidate();
@@ -1035,17 +1059,30 @@ const fmtInt = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(2)} M` : n >= 1e4 ? `${Mat
 function updatePanel(L) {
   const m = L.meta, s = L.stats;
   $("hud-eyebrow").textContent = `${m.plateLabel} · ${m.presetLabel}${m.inverse ? " · sand-line build" : ""}`;
-  $("hud-freq").textContent = fmtHz(m.frequency);
-  $("hud-mode").textContent = `${m.note} · dominant mode ${m.dominant}`;
+  const chordHz = m.chord ? m.chord.map((v) => fmtHz(v.hz)).join(" + ") : fmtHz(m.frequency);
+  $("hud-freq").textContent = chordHz;
+  $("hud-mode").textContent = m.chord ? `${m.chord.map((v) => v.note.split(" ")[0]).join(" · ")} · ${m.chord.length} voices, ${m.chord.map((v) => v.dominant).join(" / ")}` : `${m.note} · dominant mode ${m.dominant}`;
   $("figure-caption").innerHTML = "";
-  const strong = document.createElement("strong"); strong.textContent = `Sand figure at ${fmtHz(m.frequency)} Hz`;
+  const strong = document.createElement("strong"); strong.textContent = m.chord ? `Chord at ${chordHz} Hz` : `Sand figure at ${fmtHz(m.frequency)} Hz`;
   const sharp = Math.round(m.sharpness * 100);
-  $("figure-caption").append(strong, document.createTextNode(sharp >= 80
+  $("figure-caption").append(strong, document.createTextNode(m.chord
+    ? `Each voice lays its own streets on its own sand lines and settles as one era of the city, oldest first; the sand figure shows their time-averaged motion (${sharp}% sharp).`
+    : sharp >= 80
     ? `Sand gathers where the plate stands still. Those nodal lines become the boulevards (pattern ${sharp}% sharp).`
     : `Between two modes the plate never fully stands still, so the sand lines blur (pattern ${sharp}% sharp). Boulevards follow the dominant standing pattern; raise Q or nudge the frequency for crisp lines.`));
 
   const modes = $("modes"); modes.replaceChildren();
-  for (const md of m.modes) {
+  if (m.chord) for (const [vi, v] of m.chord.entries()) {
+    const head = document.createElement("div"); head.className = "mode-row"; const a = document.createElement("span"); a.textContent = `Voice ${vi + 1} · ${fmtHz(v.hz)} Hz (${v.note})`; const b = document.createElement("span"); b.textContent = `weight ${Math.round(100 * v.weight)} %`; head.append(a, b); modes.append(head);
+    for (const md of v.modes.slice(0, 3)) {
+      const row = document.createElement("div"); row.className = "mode-row";
+      const a2 = document.createElement("span"); a2.textContent = `  ${md.label}  ${md.f.toFixed(1)} Hz`;
+      const b2 = document.createElement("span"); b2.textContent = `${md.detuneHz >= 0 ? "+" : "−"}${Math.abs(md.detuneHz).toFixed(1)} Hz · ${(md.weight * 100).toFixed(0)}%`;
+      const bar = document.createElement("div"); bar.className = "bar"; const i = document.createElement("i"); i.style.width = `${md.weight * 100}%`; bar.append(i);
+      row.append(a2, b2, bar); modes.append(row);
+    }
+  }
+  else for (const md of m.modes) {
     const row = document.createElement("div"); row.className = "mode-row";
     const a = document.createElement("span"); a.textContent = `${md.label}  ${md.f.toFixed(1)} Hz`;
     const b = document.createElement("span"); b.textContent = `${md.detuneHz >= 0 ? "+" : "−"}${Math.abs(md.detuneHz).toFixed(1)} Hz · ${(md.weight * 100).toFixed(0)}%`;
@@ -1107,6 +1144,8 @@ const fromSlider = (v) => { const [a, b] = range(); return a * Math.pow(b / a, v
 function syncControls() {
   const [a, b] = range();
   params.frequency = Math.min(b, Math.max(a, params.frequency));
+  params.voices = (params.voices ?? []).map((v) => ({ hz: Math.min(b, Math.max(a, v.hz)), weight: Math.min(1, Math.max(0.05, v.weight ?? 1)) }));
+  renderVoices();
   $("freq-range").value = toSlider(params.frequency);
   if (document.activeElement !== $("freq-num")) $("freq-num").value = +params.frequency.toFixed(1);
   $("freq-range-label").textContent = `${fmtHz(a)}–${fmtHz(b)} Hz`;
@@ -1142,10 +1181,42 @@ function syncControls() {
   }
   sel.options[0].text = params.customMaterial ? `Custom (${params.customMaterial.label})` : `Preset default (${MATERIALS[pr.material]?.label ?? pr.material})`;
   sel.value = params.customMaterial ? "" : params.material ?? "";
-  $("hud-freq").textContent = fmtHz(params.frequency);
+  $("hud-freq").textContent = params.voices?.length ? [params.frequency, ...params.voices.map((v) => v.hz)].map(fmtHz).join(" + ") : fmtHz(params.frequency);
   setTone();
 }
 const numOrNull = (el, lo, hi) => { const v = parseFloat(el.value); return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : null; };
+function renderVoices() {
+  const box = $("chord-voices"), vs = params.voices ?? [];
+  if (box.dataset.sig === JSON.stringify(vs) && box.children.length === vs.length) return; // typing in a field keeps focus
+  box.dataset.sig = JSON.stringify(vs);
+  box.replaceChildren(...vs.map((v, i) => {
+    const row = document.createElement("div"); row.className = "voice";
+    const lab = document.createElement("span"); lab.textContent = `Voice ${i + 2}`;
+    const hz = document.createElement("input"); hz.type = "number"; hz.min = "1"; hz.step = "0.1"; hz.value = +v.hz.toFixed(1); hz.setAttribute("aria-label", `Voice ${i + 2} frequency in hertz`);
+    hz.addEventListener("change", () => {
+      const x = parseFloat(hz.value); if (!(x > 0)) return;
+      const others = [params.frequency, ...params.voices.filter((_, k) => k !== i).map((o) => o.hz)];
+      if (others.some((f) => Math.abs(f - x) < 0.01 * Math.min(f, x))) { $("status").textContent = `${fmtHz(x)} Hz is within 1 % of a voice already in the chord; pick another frequency.`; hz.value = +params.voices[i].hz.toFixed(1); return; }
+      params.voices[i].hz = x; regenerate(0);
+    });
+    const w = document.createElement("input"); w.type = "range"; w.min = "5"; w.max = "100"; w.step = "5"; w.value = Math.round(100 * (v.weight ?? 1)); w.title = `Weight ${Math.round(100 * (v.weight ?? 1))} %`; w.setAttribute("aria-label", `Voice ${i + 2} weight`);
+    w.addEventListener("change", () => { params.voices[i].weight = +w.value / 100; regenerate(0); });
+    const rm = document.createElement("button"); rm.type = "button"; rm.textContent = "×"; rm.title = "Remove this voice"; rm.setAttribute("aria-label", `Remove voice ${i + 2}`);
+    rm.addEventListener("click", () => { params.voices.splice(i, 1); if (!params.voices.length) params.weight0 = 1; regenerate(0); }); // a fresh chord starts at full weight
+    row.append(lab, w, hz, rm); return row;
+  }));
+  for (const b of document.querySelectorAll("#chord .chord-add button")) b.disabled = vs.length >= MAX_VOICES - 1;
+}
+for (const b of document.querySelectorAll("#chord .chord-add button")) b.addEventListener("click", () => {
+  if ((params.voices ?? []).length >= MAX_VOICES - 1) return;
+  const [lo, hi] = range(); let hz = params.frequency * +b.dataset.ratio;
+  while (hz > hi && hz / 2 >= lo) hz /= 2; // fold the interval down an octave if the plate cannot reach it
+  hz = +Math.min(hi, Math.max(lo, hz)).toFixed(1);
+  const taken = [params.frequency, ...(params.voices ?? []).map((v) => v.hz)];
+  if (taken.some((f) => Math.abs(f - hz) < 0.01 * Math.min(f, hz))) { $("status").textContent = `${fmtHz(hz)} Hz is already in the chord (the plate's range folds that interval onto it); type another frequency instead.`; return; }
+  params.voices = [...(params.voices ?? []), { hz, weight: 0.7 }];
+  regenerate(0);
+});
 $("freq-range").addEventListener("input", (e) => { params.frequency = +fromSlider(+e.target.value).toFixed(1); regenerate(260); });
 $("freq-num").addEventListener("change", (e) => { const v = parseFloat(e.target.value); if (v > 0) { params.frequency = v; regenerate(0); } });
 $("preset-seg").addEventListener("click", (e) => { const v = e.target.closest("button")?.dataset.v; if (v && v !== params.preset) { params.preset = v; params.gravity = null; params.material = null; if (v !== "custom") params.customMaterial = null; regenerate(0); } });
@@ -1238,6 +1309,7 @@ function describe(kind, r, L) {
         ["Height", `${fmt(r.h, 0)} m`], ["Floors", r.floors], ["Footprint", `${fmt(r.w, 0)} × ${fmt(r.d, 0)} m`], ["Slenderness", `1:${fmt(r.h / Math.min(r.w, r.d))}`],
         ["Foundations", `${fmt(foundationDepth(r))} m deep`], ...(r.elevation != null ? [["Ground", `${fmt(r.elevation)} m`]] : []), ["Amplitude", fmt(r.amp, 2)], ["Phase", r.polarity > 0 ? "+" : "−"],
         ...(lat ? [["Residents", Math.round(lat.residents)], ["Jobs", Math.round(lat.jobs)], ["Service line", `${fmt(lat.length, 0)} m to street node ${lat.node}`]] : []),
+        ...(r.era != null && L.meta.chord ? [["Built by", `voice ${r.era + 1} (${fmtHz(L.meta.chord[r.era].hz)} Hz)`]] : []),
         ...(peopleResult ? (() => { const bi = L.buildings.indexOf(r); return bi < 0 ? [] : [["Land value", `${Math.round(100 * peopleResult.landValue[bi])} / 100`], ["Access to jobs", lat ? `${Math.round(100 * peopleResult.access[lat.node])} / 100` : "—"], ["Market zoning", peopleResult.emergentZone[bi] + (peopleResult.emergentZone[bi] === r.zone ? "" : ` (the wave says ${r.zone})`)]]; })() : []),
       ] };
     }
@@ -1247,6 +1319,11 @@ function describe(kind, r, L) {
       const grade = planLen > 0 && L.meta.terrain?.mode !== "flat" ? [["Grade", `${fmt(100 * Math.abs(rise) / planLen, 1)} %`]] : [];
       const tr = peopleResult ? roadTraffic(L.roads.indexOf(r)) : null;
       const traffic = tr ? [["Peak flow", `${Math.round(tr.flow)} veh/h both ways`], ["Load", `${Math.round(100 * tr.vc)} % of capacity · ${tr.speed.toFixed(0)} km/h`], ["Lanes", `${tr.lanes} (${tr.lanesNeeded} needed)`]] : [];
+      if (r.era != null && L.meta.chord) {
+        const f = r.follows ?? r.era;
+        traffic.unshift(["Follows", `voice ${f + 1}'s sand lines (${fmtHz(L.meta.chord[f].hz)} Hz)`]);
+        if (f !== r.era) traffic.unshift(["Laid by", `voice ${r.era + 1}${r.era === 0 ? ", the old city" : ""}, before voice ${f + 1} broke ground`]);
+      }
       return { title: `${r.bridge ? "Bridge · " : ""}${r.kind[0].toUpperCase()}${r.kind.slice(1)} street`, color: ROAD[r.kind], pos: r.a, size: r.w * 4, rows: [["Width", `${fmt(r.w)} m`], ["Segment", `${fmt(dist3(r.a, r.b))} m`], ...grade, ...(r.bridge ? [["Deck", `${fmt(L.meta.terrain.waterLevel + L.meta.terrain.freeboard)} m, ${fmt(L.meta.terrain.freeboard)} m above the water`]] : []), ...traffic] };
     }
     case "sewer": return { title: r.forceMain ? `${themeName("sewer", "Sewer")} · force main (pumped)` : themeName("sewer", "Gravity sewer"), color: NET.sewer.color, pos: nodes[r.up].pos, depth: r.upDepth, size: 20, rows: [
@@ -1468,20 +1545,24 @@ const roadTraffic = (ri) => { // the busiest edge on a drawn road segment
 };
 const valueColor = new THREE.Color(), valueLo = new THREE.Color("#2f3a40"), valueHi = new THREE.Color("#ffd27a"), disagree = new THREE.Color("#e36b5e");
 const ZONE_COLOR = { core: "#ffb347", mixed: "#d9c27a", residential: "#7fa6b8", green: "#4d8a4a" };
+const ERA_COLOR = ["#e3905f", "#63a9be", "#b7d36b"];
 function applyPaint() {
   const mode = $("paint").value;
-  if (!layout || !peopleResult || mode === "none") { restoreColors(["road", "building"]); invalidate(); return; }
+  const needsPeople = mode === "traffic" || mode === "value" || mode === "zoning";
+  if (!layout || mode === "none" || (needsPeople && !peopleResult) || (mode === "era" && !layout.meta.chord)) { restoreColors(["road", "building"]); invalidate(); return; }
   for (const m of pickTargets) {
     const kind = m.userData.kind;
     if (kind === "road") {
       ensureInstanceColor(m);
       if (mode === "traffic") layout.roads.forEach((r, i) => { const t = roadTraffic(i); m.setColorAt(i, utilColor(ROAD[r.kind] ?? "#999", t ? t.vc : 0)); });
+      else if (mode === "era") layout.roads.forEach((r, i) => m.setColorAt(i, valueColor.set(ERA_COLOR[r.era ?? 0] ?? "#999").lerp(new THREE.Color(ROAD[r.kind] ?? "#999"), 0.35)));
       else m.instanceColor.array.set(m.userData.baseColors);
       m.instanceColor.needsUpdate = true;
     } else if (kind === "building") {
       ensureInstanceColor(m);
       const idx = m.userData.index;
-      if (mode === "value") idx.forEach((bi, j) => m.setColorAt(j, valueColor.copy(valueLo).lerp(valueHi, Math.pow(peopleResult.landValue[bi], 0.8))));
+      if (mode === "era") idx.forEach((bi, j) => m.setColorAt(j, valueColor.set(ERA_COLOR[layout.buildings[bi].era ?? 0] ?? "#999")));
+      else if (mode === "value") idx.forEach((bi, j) => m.setColorAt(j, valueColor.copy(valueLo).lerp(valueHi, Math.pow(peopleResult.landValue[bi], 0.8))));
       else if (mode === "zoning") idx.forEach((bi, j) => { const z = peopleResult.emergentZone[bi]; valueColor.set(ZONE_COLOR[z] ?? "#888"); if (z !== layout.buildings[bi].zone) valueColor.lerp(disagree, 0.45); m.setColorAt(j, valueColor); });
       else m.instanceColor.array.set(m.userData.baseColors);
       m.instanceColor.needsUpdate = true;
@@ -1561,9 +1642,17 @@ function updateResilience(L, R) {
 }
 
 // drive tone
-let audio = null, osc = null, gain = null, toneOn = false;
+let audio = null, osc = null, gain = null, toneOn = false, voiceOscs = [];
+const toneHz = () => [params.frequency, ...(params.voices ?? []).map((v) => v.hz)];
 function setTone() {
-  if (osc) osc.frequency.setTargetAtTime(params.frequency, audio.currentTime, 0.03);
+  if (!osc) return;
+  const hz = toneHz();
+  osc.frequency.setTargetAtTime(hz[0], audio.currentTime, 0.03);
+  // extra voices get their own oscillators, added or removed as the chord changes
+  while (voiceOscs.length < hz.length - 1) { const o = audio.createOscillator(); o.type = "sine"; o.frequency.value = hz[voiceOscs.length + 1]; o.connect(gain); o.start(); voiceOscs.push(o); }
+  while (voiceOscs.length > hz.length - 1) { const o = voiceOscs.pop(); try { o.stop(); } catch {} }
+  voiceOscs.forEach((o, i) => o.frequency.setTargetAtTime(hz[i + 1], audio.currentTime, 0.03));
+  gain.gain.setTargetAtTime(0.07 / Math.sqrt(hz.length), audio.currentTime, 0.05);
 }
 $("tone").addEventListener("click", async () => {
   try {
@@ -1574,9 +1663,9 @@ $("tone").addEventListener("click", async () => {
       osc = audio.createOscillator(); gain = audio.createGain();
       osc.type = "sine"; osc.frequency.value = params.frequency;
       gain.gain.value = 0; gain.gain.setTargetAtTime(0.07, audio.currentTime, 0.05);
-      osc.connect(gain).connect(audio.destination); osc.start();
+      osc.connect(gain).connect(audio.destination); osc.start(); setTone();
     } else if (osc) {
-      gain.gain.setTargetAtTime(0, audio.currentTime, 0.05); const o = osc; setTimeout(() => o.stop(), 300); osc = null;
+      gain.gain.setTargetAtTime(0, audio.currentTime, 0.05); const o = osc, vs = voiceOscs; voiceOscs = []; setTimeout(() => { o.stop(); vs.forEach((x) => { try { x.stop(); } catch {} }); }, 300); osc = null;
     }
     $("tone").setAttribute("aria-pressed", String(toneOn));
   } catch { $("status").textContent = "Sound could not start in this view."; }
@@ -1592,7 +1681,7 @@ $("status").textContent = "Checking whether this view can save files…";
   saveButtons.forEach((b) => (b.disabled = !downloads));
   $("status").textContent = downloads ? "" : "Saving files isn't available in this view.";
 })();
-const baseName = () => `cymatic-${layout.meta.preset}-${layout.meta.plate}-${fmtHz(layout.meta.frequency)}Hz-seed${layout.meta.seed}`;
+const baseName = () => `cymatic-${layout.meta.preset}-${layout.meta.plate}-${layout.meta.chord ? layout.meta.chord.map((v) => fmtHz(v.hz)).join('+') : fmtHz(layout.meta.frequency)}Hz-seed${layout.meta.seed}`;
 async function offer(filename, data) {
   try { await downloads.save({ filename, data }); $("status").textContent = `Saved ${filename}.`; }
   catch (err) {

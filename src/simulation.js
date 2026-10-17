@@ -74,7 +74,7 @@ const weibull = (u, scale, k = LIFETIMES.shape) => scale * Math.pow(-Math.log(1 
 
 // ---------------------------------------------------------------- shared helpers
 const nodeKey = (P) => `${Math.round(P[0] * 4)},${Math.round(P[1] * 4)},${Math.round(P[2] * 4)}`;
-function dijkstraFrom(graph, source) {
+function dijkstraFrom(graph, source, weight = (e) => e.len) {
   const n = graph.nodes.length, d = new Float64Array(n).fill(Infinity), parent = new Int32Array(n).fill(-1), pedge = new Int32Array(n).fill(-1);
   const heapK = [], heapV = [];
   const push = (k, v) => { let i = heapK.length; heapK.push(k); heapV.push(v); while (i > 0) { const p = (i - 1) >> 1; if (heapK[p] <= k) break; heapK[i] = heapK[p]; heapV[i] = heapV[p]; i = p; } heapK[i] = k; heapV[i] = v; };
@@ -82,9 +82,14 @@ function dijkstraFrom(graph, source) {
   d[source] = 0; push(0, source);
   while (heapK.length) {
     const [dd, u] = pop(); if (dd > d[u]) continue;
-    for (const ei of graph.adj[u]) { const e = graph.edges[ei], v = e.a === u ? e.b : e.a; if (dd + e.len < d[v]) { d[v] = dd + e.len; parent[v] = u; pedge[v] = ei; push(d[v], v); } }
+    for (const ei of graph.adj[u]) { const e = graph.edges[ei], v = e.a === u ? e.b : e.a, w = weight(e); if (dd + w < d[v]) { d[v] = dd + w; parent[v] = u; pedge[v] = ei; push(d[v], v); } }
   }
   return { d, parent, pedge };
+}
+function segDist(P, A, B) {
+  const ab = [B[0] - A[0], B[1] - A[1], B[2] - A[2]], ap = [P[0] - A[0], P[1] - A[1], P[2] - A[2]];
+  const L2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2] || 1, t = Math.max(0, Math.min(1, (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / L2));
+  return Math.hypot(ap[0] - t * ab[0], ap[1] - t * ab[1], ap[2] - t * ab[2]);
 }
 function drivePointWorld(meta) {
   const d = meta.driveOffset ?? 0.37, E = meta.world.extent;
@@ -119,17 +124,24 @@ export function simulate(layout, opts = {}) {
 
   // founding nucleus: the strongest antinode nearest the drive point
   const dp = drivePointWorld(meta), E = meta.world.extent;
+  // in a chord the first voice is the old city: the nucleus is drawn from it and later voices settle after it
+  const chord = Array.isArray(layout.meta.chord) && layout.meta.chord.length > 1;
+  const eraOf = (b) => (chord ? b.era ?? 0 : 0);
   let fb = 0, fs = -Infinity;
-  layout.buildings.forEach((b, i) => { const s = b.amp - dist(b.pos, dp) / E + (b.landmark ? 0.3 : 0); if (s > fs) { fs = s; fb = i; } });
+  layout.buildings.forEach((b, i) => { const s = b.amp - dist(b.pos, dp) / E + (b.landmark ? 0.3 : 0) - (eraOf(b) ? 10 : 0); if (s > fs) { fs = s; fb = i; } });
   const nodeOf = new Int32Array(layout.buildings.length).fill(-1);
   for (const l of infra.laterals) nodeOf[l.building] = l.node;
   const founding = nodeOf[fb] >= 0 ? nodeOf[fb] : infra.laterals[0]?.node ?? 0;
-  const { d: dist0, parent } = dijkstraFrom(graph, founding);
+  const { d: dist0, parent: plainParent } = dijkstraFrom(graph, founding);
+  // in a chord, a building's way back to the nucleus prefers the streets of the oldest voices, so the old city opens
+  // its own streets first and a later voice's streets open with that voice
+  const routed = chord ? dijkstraFrom(graph, founding, (e) => e.len * (1 + 4 * (e.era ?? 0))) : null;
+  const parent = chord ? routed.parent : plainParent;
 
   // settlement order: street distance from the nucleus, pulled earlier by amplitude, with a little noise
   const score = layout.buildings.map((b, i) => {
     const dd = Number.isFinite(dist0[nodeOf[i]]) ? dist0[nodeOf[i]] : 4 * E;
-    return { i, s: (dd + 15) * (1.3 - 0.6 * b.amp) * (1 + 0.25 * (rng() - 0.5)), distance: dd };
+    return { i, s: eraOf(b) * 1e9 + (dd + 15) * (1.3 - 0.6 * b.amp) * (1 + 0.25 * (rng() - 0.5)), distance: dd };
   }).sort((x, y) => x.s - y.s || x.i - y.i);
   const r = GROWTH.rate, denom = Math.exp(r * years) - 1;
   const history = new Array(layout.buildings.length);
@@ -169,9 +181,35 @@ export function simulate(layout, opts = {}) {
     while (u >= 0 && nodeYear[u] > h.built) { nodeYear[u] = h.built; u = parent[u]; }
   }
   const keyIndex = new Map(graph.nodes.map((n, i) => [nodeKey(n.pos), i]));
-  const roadYear = layout.roads.map((rd) => {
+  // when each voice of a chord breaks ground: its first building
+  const eraStart = [];
+  if (chord) history.forEach((h) => { const e = eraOf(layout.buildings[h.building]); if (!(eraStart[e] <= h.built)) eraStart[e] = h.built; });
+  // a later voice's street segment that an older building's route runs along (any graph edge of it) opens with
+  // that route; the graph splits segments at junctions, so the edge is matched to its segment by position
+  let routeYear = null;
+  if (chord) {
+    routeYear = new Float64Array(layout.roads.length).fill(Infinity);
+    const cell = 60, hash = new Map(), hk = (P) => P.map((x) => Math.floor(x / cell)).join(',');
+    layout.roads.forEach((rd, i) => { if (!rd.era) return; const m = [(rd.a[0] + rd.b[0]) / 2, (rd.a[1] + rd.b[1]) / 2, (rd.a[2] + rd.b[2]) / 2]; (hash.get(hk(m)) ?? hash.set(hk(m), []).get(hk(m))).push(i); });
+    for (let v = 0; v < graph.nodes.length; v++) {
+      const ei = routed.pedge[v]; if (ei < 0 || !Number.isFinite(nodeYear[v])) continue;
+      const e = graph.edges[ei]; if (!e.era) continue;
+      const A = graph.nodes[e.a].pos, B = graph.nodes[e.b].pos, M = [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2, (A[2] + B[2]) / 2];
+      const [cx, cy, cz] = M.map((x) => Math.floor(x / cell));
+      for (let x = cx - 1; x <= cx + 1; x++) for (let y = cy - 1; y <= cy + 1; y++) for (let z = cz - 1; z <= cz + 1; z++) for (const i of hash.get(`${x},${y},${z}`) ?? []) {
+        const rd = layout.roads[i]; if (rd.era !== e.era || segDist(M, rd.a, rd.b) > 0.25) continue;
+        routeYear[i] = Math.min(routeYear[i], nodeYear[v]);
+      }
+    }
+  }
+  const roadYear = layout.roads.map((rd, i) => {
     const a = keyIndex.get(nodeKey(rd.a)), b = keyIndex.get(nodeKey(rd.b));
-    return Math.min(a != null ? nodeYear[a] : Infinity, b != null ? nodeYear[b] : Infinity);
+    const ya = a != null ? nodeYear[a] : Infinity, yb = b != null ? nodeYear[b] : Infinity;
+    let y = Math.min(ya, yb); // a street opens when the network reaches either end
+    // a later voice's street waits for its voice, unless an older building's route runs along it
+    const e = chord ? rd.era ?? 0 : 0;
+    if (e > 0 && y < (eraStart[e] ?? Infinity)) y = Math.min(routeYear[i], eraStart[e] ?? Infinity);
+    return y;
   });
 
   // keyframes: complete cities at K years, networks rebuilt for what exists
@@ -189,7 +227,16 @@ export function simulate(layout, opts = {}) {
       const b = layout.buildings[h.building];
       buildings.push({ ...b, floors: g.floors, h: b.shape === 'dome' ? Math.min(g.h, 0.6 * Math.min(b.w, b.d)) : g.h, built: h.built, rebuilt: g.year, source: h.building });
     }
-    const roads = layout.roads.filter((_, i) => roadYear[i] <= year);
+    // a later voice's street that an older route opened early was built by the voice of its day: credit it to that
+    // voice, and keep whose sand lines it follows
+    const builtBy = (y) => { let e = 0; eraStart.forEach((ys, k) => { if (ys != null && ys <= y) e = Math.max(e, k); }); return e; };
+    const roads = [];
+    layout.roads.forEach((rd, i) => {
+      if (roadYear[i] > year) return;
+      const e = chord ? rd.era ?? 0 : 0;
+      if (e > 0 && roadYear[i] < (eraStart[e] ?? Infinity)) roads.push({ ...rd, era: builtBy(roadYear[i]), follows: e });
+      else roads.push(rd);
+    });
     const trees = layout.trees;
     const sub = { meta: { ...meta, year }, roads, buildings, trees, stats: { ...layout.stats }, checks: [] };
     const inf = buildInfrastructure(sub);
@@ -210,7 +257,13 @@ export function simulate(layout, opts = {}) {
       note: describeKeyframe(k, built, replaced, inf.stats, prevStats) });
     prevStats = inf.stats;
   }
-  return { years, founding: { building: fb, node: founding }, history, keyframes, events };
+  // when each voice of a chord broke ground
+  let eraStarts = null;
+  if (chord) {
+    eraStarts = layout.meta.chord.map((v, e) => { let first = Infinity; history.forEach((h) => { if (eraOf(layout.buildings[h.building]) === e) first = Math.min(first, h.built); }); return { era: e, hz: v.hz, year: Number.isFinite(first) ? first : null }; });
+    for (const ev of events) for (const es of eraStarts) if (es.year != null && es.era > 0 && es.year <= ev.year && es.year > (events[events.indexOf(ev) - 1]?.year ?? -1)) ev.note += `, voice ${es.era + 1} (${Math.round(es.hz)} Hz) breaks ground`;
+  }
+  return { years, founding: { building: fb, node: founding }, history, keyframes, events, eraStarts };
 }
 function describeKeyframe(k, built, replaced, s, prev) {
   const bits = [`${built} built`];

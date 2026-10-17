@@ -164,19 +164,20 @@ export function buildStreetGraph(layout) {
     if (id === undefined) { id = nodes.length; index.set(k, id); nodes.push({ pos: P, deg: 0, elev: elevOf(P) }); }
     return id;
   };
-  const raw = roads.map((r) => ({ a: nodeOf(r.a), b: nodeOf(r.b), kind: r.kind, w: r.w, bridge: !!r.bridge })).filter((e) => e.a !== e.b);
+  const raw = roads.map((r) => ({ a: nodeOf(r.a), b: nodeOf(r.b), kind: r.kind, w: r.w, bridge: !!r.bridge, era: r.era })).filter((e) => e.a !== e.b);
   // split any segment that another node sits on (spoke starts at segment midpoints)
   const hash = new PointHash(40);
   nodes.forEach((n, i) => hash.add(plan(n.pos), i));
   const edges = [];
   const seen = new Set();
-  const pushEdge = (a, b, kind, w, bridge = false) => {
+  const pushEdge = (a, b, kind, w, bridge = false, era = undefined) => {
     if (a === b) return;
     const k = a < b ? `${a}-${b}` : `${b}-${a}`;
     if (seen.has(k)) return;
     seen.add(k);
     const e = { a, b, kind, w, len: dist(nodes[a].pos, nodes[b].pos) };
     if (bridge) e.bridge = true;
+    if (era != null) e.era = era; // a chord's street keeps the voice that laid it
     edges.push(e);
   };
   for (const e of raw) {
@@ -191,8 +192,8 @@ export function buildStreetGraph(layout) {
     }
     splits.sort((x, y) => x[0] - y[0]);
     let prev = e.a;
-    for (const [, ni] of splits) { pushEdge(prev, ni, e.kind, e.w, e.bridge); prev = ni; }
-    pushEdge(prev, e.b, e.kind, e.w, e.bridge);
+    for (const [, ni] of splits) { pushEdge(prev, ni, e.kind, e.w, e.bridge, e.era); prev = ni; }
+    pushEdge(prev, e.b, e.kind, e.w, e.bridge, e.era);
   }
   // junctions where streets cross without sharing a node (spokes across rings, spokes across spokes)
   {
@@ -243,8 +244,8 @@ export function buildStreetGraph(layout) {
       old.forEach((e, i) => {
         const sp = splits[i].sort((x, y) => x[0] - y[0]);
         let prev = e.a;
-        for (const [, id] of sp) { pushEdge(prev, id, e.kind, e.w, e.bridge); prev = id; }
-        pushEdge(prev, e.b, e.kind, e.w, e.bridge);
+        for (const [, id] of sp) { pushEdge(prev, id, e.kind, e.w, e.bridge, e.era); prev = id; }
+        pushEdge(prev, e.b, e.kind, e.w, e.bridge, e.era);
       });
     }
   }
