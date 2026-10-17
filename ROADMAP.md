@@ -9,7 +9,7 @@ Each phase lists what ships, what proves it, and the seam it opens for other eng
 | 0 | Generator: physics → plan → buildings → structure → underground | ✅ 1.0.0 |
 | 1 | Time axis, flow model, failure analysis | ✅ 1.1.0 |
 | 2 | Terrain and water | ✅ 1.2.0 |
-| 3 | People, traffic, land value | ⏳ |
+| 3 | People, traffic, land value | ✅ 1.3.0 |
 | 4 | Multi-frequency chords | ⏳ |
 | 5 | Query layer and the inverse problem | ⏳ |
 | 6 | Export and headless CLI | ⏳ |
@@ -45,11 +45,13 @@ Each phase lists what ships, what proves it, and the seam it opens for other eng
 
 **Not done (honest gaps):** rivers that flow to the perimeter (water is a level, not a drainage solution); retaining walls, cut-and-fill and approach ramps; metro depth is below the local ground rather than a level alignment; explicit relief far beyond automatic leaves pressure zones the zoning loop cannot finish (checks fail and say so).
 
-## Phase 3 — People, traffic, land value
+## Phase 3 — People, traffic, land value (1.3)
 
-A synthetic population with homes and jobs; commute assignment on the street graph (sampled origins, all-or-nothing then iterative); street widths justified by flow rather than preset; metro ridership earned from the assignment; land value rising with amplitude and access; density feeding back into zoning so it emerges rather than being assigned.
+**Shipped.** `people(layout, infra)`: residents and jobs per street node; sampled origins carrying their cells; gravity destination choice on street distance; walk by distance, metro vs. car by door-to-door time; peak-hour cars assigned with BPR delay and averaged over passes; Hansen accessibility and a land-value index per lot; the zoning the market would produce reported against the wave's; street widths judged by the flow they carry; metro ridership earned and carried by `flows()`.
 
-Proof: trip conservation; congestion only on streets that carry flow; land value monotone in access; the emergent FAR distribution stays within the planning checks.
+**Proof (shipped):** trips conserved; vehicle-kilometres equal car trips times their paths; flow only on shortest-path trees; BPR and capacity by hand; congestion raises times and moves people to the metro; averaging verified against a last-pass-only mutant; land value monotone in its inputs and rank-correlated with access (ρ ≈ 0.93–0.99); zoning as value bands; determinism.
+
+**Not done (honest gaps):** non-commute trips; signal and turning delay; parking supply; value feedback on growth (densification is still amplitude-led); route choice between equal paths; the emergent zoning is reported, not built.
 
 ## Phase 4 — Multi-frequency chords
 

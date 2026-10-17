@@ -83,6 +83,12 @@ test('the assignment responds to congestion: halving the street capacity moves c
     const one = people(L, L.infra, { iterations: 1 });
     let diff = 0, tot = 0; for (let e = 0; e < tight.traffic.edgeFlow.length; e++) { diff += Math.abs(tight.traffic.edgeFlow[e] - one.traffic.edgeFlow[e]) * L.infra.graph.edges[e].len; tot += tight.traffic.edgeFlow[e] * L.infra.graph.edges[e].len; }
     assert.ok(diff / tot > 0.05, `congested: passes differ by ${(100 * diff / tot).toFixed(1)} %`);
+    // and the three-pass result is an average, not the last pass: every edge the first pass loaded keeps at least a
+    // third of that flow (weights 1/3 each), which a "last pass only" assignment would not give on an oscillating network
+    let dropped = 0, below = 0;
+    for (let e = 0; e < one.traffic.edgeFlow.length; e++) if (one.traffic.edgeFlow[e] > 0) { if (tight.traffic.edgeFlow[e] <= 0) dropped++; if (tight.traffic.edgeFlow[e] < one.traffic.edgeFlow[e] / 3 - 1e-9) below++; }
+    assert.equal(dropped, 0, 'no loaded edge loses all its flow under averaging');
+    assert.equal(below, 0, 'every loaded edge keeps at least a third of its first-pass flow');
   } finally { TRAFFIC.laneCapacity = saved; }
   const one = people(L, L.infra, { iterations: 1 });
   let diff = 0, tot = 0; for (let e = 0; e < base.traffic.edgeFlow.length; e++) { diff += Math.abs(base.traffic.edgeFlow[e] - one.traffic.edgeFlow[e]) * L.infra.graph.edges[e].len; tot += base.traffic.edgeFlow[e] * L.infra.graph.edges[e].len; }
