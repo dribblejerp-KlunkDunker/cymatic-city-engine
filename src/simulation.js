@@ -227,7 +227,16 @@ export function simulate(layout, opts = {}) {
       const b = layout.buildings[h.building];
       buildings.push({ ...b, floors: g.floors, h: b.shape === 'dome' ? Math.min(g.h, 0.6 * Math.min(b.w, b.d)) : g.h, built: h.built, rebuilt: g.year, source: h.building });
     }
-    const roads = layout.roads.filter((_, i) => roadYear[i] <= year);
+    // a later voice's street that an older route opened early was built by the voice of its day: credit it to that
+    // voice, and keep whose sand lines it follows
+    const builtBy = (y) => { let e = 0; eraStart.forEach((ys, k) => { if (ys != null && ys <= y) e = Math.max(e, k); }); return e; };
+    const roads = [];
+    layout.roads.forEach((rd, i) => {
+      if (roadYear[i] > year) return;
+      const e = chord ? rd.era ?? 0 : 0;
+      if (e > 0 && roadYear[i] < (eraStart[e] ?? Infinity)) roads.push({ ...rd, era: builtBy(roadYear[i]), follows: e });
+      else roads.push(rd);
+    });
     const trees = layout.trees;
     const sub = { meta: { ...meta, year }, roads, buildings, trees, stats: { ...layout.stats }, checks: [] };
     const inf = buildInfrastructure(sub);

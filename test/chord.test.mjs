@@ -139,8 +139,16 @@ test("each voice's boulevards lie on that voice's nodal lines, and the rings on 
       assert.ok(w[r.era] >= (1 - VOICE_BAND) * Math.max(...w) - 1e-9, `${plate}: a street of voice ${r.era} outside its territory`);
       assert.ok(F.voices[r.era].env(u, v) >= F.voices[r.era].at(u, v).A - 0.05, 'the envelope is at least the amplitude under it (grid resolution aside)');
     }
-    assert.ok(L.roads.some((r) => r.kind === 'wall') === (plate !== 'sphere'), 'one perimeter, from the first voice');
-    assert.ok(L.roads.filter((r) => r.kind === 'wall').every((r) => r.era === 0));
+    assert.ok(L.roads.some((r) => r.kind === 'wall') === (plate !== 'sphere'), 'a perimeter on plane plates only');
+    // each stretch of the perimeter belongs to the voice that shapes it there (strongest weighted envelope), once
+    const wts = chord.map((c) => (typeof c === 'object' ? c.weight : 1));
+    for (const r of L.roads.filter((x) => x.kind === 'wall')) {
+      const [u, v] = F.toNorm([(r.a[0] + r.b[0]) / 2, (r.a[1] + r.b[1]) / 2, (r.a[2] + r.b[2]) / 2]);
+      const w = F.voices.map((vc, i) => wts[i] * vc.env(u, v)); let best = 0; w.forEach((x, i) => { if (x > w[best]) best = i; });
+      assert.equal(r.era, best, `${plate}: a wall stretch laid by voice ${r.era}, shaped by voice ${best}`);
+    }
+    const wallKeys = L.roads.filter((x) => x.kind === 'wall').map((r) => [r.a, r.b].map((P) => P.map((x) => x.toFixed(2)).join(',')).sort().join('|'));
+    assert.equal(new Set(wallKeys).size, wallKeys.length, `${plate}: no stretch of wall laid twice`);
   }
 });
 
@@ -151,6 +159,12 @@ test('the street budget follows the voices: a faint voice lays little, and a cho
   assert.ok(Math.abs(kmFaint - km) / km < 0.05, `a near-silent voice leaves the city as it was: ${kmFaint.toFixed(0)} vs ${km.toFixed(0)} km`);
   assert.ok(kmFaint1 < 0.02 * kmFaint, `the faint voice lays ${kmFaint1.toFixed(1)} km`);
   assert.ok(Math.abs(faint.stats.buildings - single.stats.buildings) / single.stats.buildings < 0.05);
+  // and the same when the faint voice is the first one (the perimeter goes to the voice that shapes it)
+  for (const [plate, preset, f0, f1] of [['circle', 'city', 432, 576], ['square', 'town', 300, 375]]) {
+    const loud = city({ plate, preset, frequency: f1 }), weak = city({ plate, preset, chord: [{ hz: f0, weight: 0.01 }, f1] });
+    assert.ok(Math.abs(roadKm(weak.roads) - roadKm(loud.roads)) / roadKm(loud.roads) < 0.05, `${plate}: a faint first voice, ${roadKm(weak.roads).toFixed(1)} vs ${roadKm(loud.roads).toFixed(1)} km`);
+    assert.ok(Math.abs(weak.stats.buildings - loud.stats.buildings) / loud.stats.buildings < 0.05, `${plate}: ${weak.stats.buildings} vs ${loud.stats.buildings} buildings`);
+  }
   // weight moves the streets between voices, monotonically
   const share = (w) => { const L = city({ plate: 'circle', preset: 'city', chord: [432, { hz: 648, weight: w }] }); return roadKm(L.roads.filter((r) => r.era === 1)) / roadKm(L.roads); };
   const s3 = share(0.3), s6 = share(0.6), s10 = share(1);
@@ -215,16 +229,36 @@ test('growth on a chord: the first voice is the old city, later voices break gro
     for (const c of k.infra.checks) assert.notEqual(c.status, 'fail', `year ${k.year}: ${c.id} ${c.value}`);
     if (k.year < sim.eraStarts[1].year) {
       assert.ok(k.layout.buildings.every((b) => b.era === 0), `year ${k.year}: only the old city stands`);
-      // a later voice's street can stand before that voice only where the old city's routes run between its
-      // separated lobes: a minority of the frame's streets, and never an island touching no other street
-      const R = k.layout.roads, early = R.filter((r) => r.era === 1);
-      const km = (rs) => rs.reduce((t, r) => t + Math.hypot(...sub(r.b, r.a)), 0);
-      assert.ok(km(early) <= 0.4 * km(R), `year ${k.year}: voice 2 already has ${(100 * km(early) / km(R)).toFixed(0)} % of the streets`);
-      const touches = (r) => { const n = Math.max(2, Math.ceil(Math.hypot(...sub(r.b, r.a)) / 2)); for (let q = 0; q <= n; q++) { const P = [0, 1, 2].map((c) => r.a[c] + (r.b[c] - r.a[c]) * q / n); if (R.some((o) => o !== r && distToSegment(P, o.a, o.b) <= 1.0)) return true; } return false; }; // the street graph joins crossings within 1 m
-      const islands = early.filter((r) => !touches(r));
-      assert.equal(islands.length, 0, `year ${k.year}: ${islands.length} voice-2 segments touch no other street`);
+      // before voice 2 breaks ground nothing is credited to it: streets along its lines were laid by the old city
+      assert.ok(k.layout.roads.every((r) => r.era === 0), `year ${k.year}: a street credited to voice 2 before it breaks ground`);
     }
   }
+  // every street the old city laid along voice 2's lines lies on a route the old city uses: recompute the routes
+  // independently (Dijkstra from the nucleus, later voices' streets five times as long, as the growth model does)
+  // and check each early street carries a routed edge of its own voice
+  const I = L.infra ?? buildInfrastructure(L), G = I.graph, nodeOf = new Map(I.laterals.map((l) => [l.building, l.node]));
+  const n = G.nodes.length, d = new Float64Array(n).fill(Infinity), par = new Int32Array(n).fill(-1), pe = new Int32Array(n).fill(-1), done = new Uint8Array(n);
+  d[sim.founding.node] = 0;
+  for (;;) { // plain O(n²) Dijkstra: a town is small
+    let u = -1; for (let v = 0; v < n; v++) if (!done[v] && Number.isFinite(d[v]) && (u < 0 || d[v] < d[u])) u = v;
+    if (u < 0) break; done[u] = 1;
+    for (const ei of G.adj[u]) { const e = G.edges[ei], v = e.a === u ? e.b : e.a, w = e.len * (1 + 4 * (e.era ?? 0)); if (d[u] + w < d[v]) { d[v] = d[u] + w; par[v] = u; pe[v] = ei; } }
+  }
+  for (const k of sim.keyframes) {
+    const early = k.layout.roads.filter((r) => r.follows != null && r.follows !== r.era);
+    if (!early.length) continue;
+    const routed = []; const used = new Uint8Array(G.edges.length);
+    for (const h of sim.history) { if (h.built > k.year) continue; for (let u = nodeOf.get(h.building); u != null && u >= 0 && pe[u] >= 0; u = par[u]) { if (used[pe[u]]) break; used[pe[u]] = 1; routed.push(pe[u]); } }
+    const mids = routed.filter((ei) => G.edges[ei].era > 0).map((ei) => { const e = G.edges[ei], A = G.nodes[e.a].pos, B = G.nodes[e.b].pos; return { era: e.era, M: [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2, (A[2] + B[2]) / 2] }; });
+    const off = early.filter((r) => !mids.some((m) => m.era === r.follows && distToSegment(m.M, r.a, r.b) <= 0.5));
+    assert.equal(off.length, 0, `year ${k.year}: ${off.length} of ${early.length} early voice-2 streets lie on no route of the old city`);
+  }
+  // and the old city keeps to its own streets where it can: lots reachable over voice-1 streets alone route over them
+  const own = new Float64Array(n).fill(Infinity), q = [sim.founding.node]; own[sim.founding.node] = 0;
+  while (q.length) { const u = q.pop(); for (const ei of G.adj[u]) { const e = G.edges[ei], v = e.a === u ? e.b : e.a; if ((e.era ?? 0) === 0 && own[v] === Infinity) { own[v] = 1; q.push(v); } } }
+  let reachable = 0, strayed = 0;
+  for (const h of sim.history) { if (L.buildings[h.building].era !== 0) continue; const u0 = nodeOf.get(h.building); if (u0 == null || own[u0] === Infinity) continue; reachable++; for (let u = u0; pe[u] >= 0; u = par[u]) if ((G.edges[pe[u]].era ?? 0) > 0) { strayed++; break; } }
+  assert.ok(reachable > 0 && strayed <= 0.02 * reachable, `${strayed} of ${reachable} old-city lots with an old-city route still route over voice 2`);
   // a single-frequency city has no eras and no era starts
   const single = simulate(city({ plate: 'circle', preset: 'town', frequency: 300 }), { years: 40, keyframes: 2 });
   assert.equal(single.eraStarts, null);

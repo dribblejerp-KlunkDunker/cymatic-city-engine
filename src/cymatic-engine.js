@@ -780,7 +780,11 @@ function buildRoads(p, dom, field, g, opts = {}) {
       }
       pts.push(pts[0]);
     }
-    for (let i = 1; i < pts.length; i++) { const r = { a: pts[i - 1], b: pts[i], w: pr.widths.wall, kind: 'wall' }; if (era != null) r.era = era; roads.push(r); }
+    for (let i = 1; i < pts.length; i++) {
+      // in a chord each stretch of the perimeter belongs to the voice that shapes it there (no overlap band: one wall)
+      if (opts.ownWall && !opts.ownWall(scale3(add(pts[i - 1], pts[i]), 0.5))) continue;
+      const r = { a: pts[i - 1], b: pts[i], w: pr.widths.wall, kind: 'wall' }; if (era != null) r.era = era; roads.push(r);
+    }
   }
   // 4. gradient spokes (minor hyperstreamlines) toward the antinodes, seeded on the nodal lines first,
   //    then on the rings and the wall, so low modes with no interior nodal line still get connected streets
@@ -792,7 +796,7 @@ function buildRoads(p, dom, field, g, opts = {}) {
     let dsep = pr.streetSpacing * 2.5;
     let spokes = [];
     for (let iter = 0; iter < 5; iter++) {
-      spokes = traceSpokes(dom, field, seeds, dsep, pr);
+      spokes = traceSpokes(dom, field, seeds, dsep, pr, keep);
       if (keep) spokes = spokes.filter((r) => kept(r.a, r.b));
       if (era != null) for (const r of spokes) r.era = era;
       const total = base.reduce((s, r) => s + len3(sub(r.b, r.a)), 0) + spokes.reduce((s, r) => s + len3(sub(r.b, r.a)), 0);
@@ -806,7 +810,7 @@ function buildRoads(p, dom, field, g, opts = {}) {
   return { roads, nodalSpacing, ringLevels, spokeSpacing, targetLength, wBoulevard };
 }
 
-function traceSpokes(dom, field, seeds, dsep, pr) {
+function traceSpokes(dom, field, seeds, dsep, pr, keep = null) {
   const out = [];
   const accepted = new Map(), cellA = dsep;
   const key = (P, c) => `${Math.floor(P[0] / c)},${Math.floor(P[1] / c)},${Math.floor(P[2] / c)}`;
@@ -836,6 +840,7 @@ function traceSpokes(dom, field, seeds, dsep, pr) {
         if (dom.kind === 'sphere') Pn = scale3(norm3(Pn), dom.Rs);
         const [un, vn] = dom.toNorm(Pn);
         if (!dom.inside(un * 1.02, vn * 1.02)) break;
+        if (keep && !keep(un, vn)) break; // a chord voice's spoke ends where its territory does
         const sn = field.S(un, vn);
         if (step > 1 && dir * sn < 0) break;
         if (Math.abs(sn) < prev - 1e-4) break;   // passed the crest
@@ -1069,7 +1074,7 @@ export function generateCity(input = {}) {
     // shapes the plate (its territory, plus a narrow overlap band so the networks cross and join); its street
     // budget is its share of the plate, so a faint voice lays little and a chord tends to its loudest voice
     const territory = voiceTerritories(voices, grid);
-    const parts = voices.map((v, i) => buildRoads(p, dom, v.field, v.grid, { share: territory[i], era: i, wall: i === 0, keep: (u, vv) => inTerritory(voices, i, u, vv) }));
+    const parts = voices.map((v, i) => buildRoads(p, dom, v.field, v.grid, { share: territory[i], era: i, wall: true, ownWall: (P) => { const [u, vv] = dom.toNorm(P); return dominantEnvelope(voices, u, vv) === i; }, keep: (u, vv) => inTerritory(voices, i, u, vv) }));
     rd = { ...parts[0], roads: dropFragments(parts.flatMap((x) => x.roads), FRAGMENT_MIN), targetLength: parts.reduce((s, x) => s + x.targetLength, 0) };
     rd.nodalSpacing = Math.min(...parts.map((x) => x.nodalSpacing));
   }
