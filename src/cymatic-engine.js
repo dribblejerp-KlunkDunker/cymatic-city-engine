@@ -4,7 +4,7 @@
 //           -> districts, lots and buildings under planning and structural limits.
 // Pure JavaScript, no dependencies; runs in the browser and in Node.
 
-export const ENGINE_VERSION = '1.2.0';
+export const ENGINE_VERSION = '1.3.0';
 const TAU = Math.PI * 2;
 const G0 = 9.80665;
 

@@ -20,6 +20,7 @@ It runs as a single self-contained web page (`dist/cymatic-city.html`) or as a d
 - [The underground](#the-underground)
 - [Terrain and water](#terrain-and-water)
 - [Simulation: time, flow, failure](#simulation-time-flow-failure)
+- [People, traffic, land value](#people-traffic-land-value)
 - [Realism and fantasy](#realism-and-fantasy)
 - [Profiles](#profiles)
 - [Module API](#module-api)
@@ -43,6 +44,7 @@ It runs as a single self-contained web page (`dist/cymatic-city.html`) or as a d
 | **Terrain** | Flat by default. *Relief* lets the standing wave be the ground (antinodes rise, troughs sink and flood into lakes crossed by bridges); *valleys* make every lobe a hill with the sand lines as valleys, optionally flooded into canals; or import a heightmap from another engine. Automatic relief keeps the ground under a 9 % grade; sewers follow true inverts, tanks climb to the high ground, pressure zones split and valves cap the basins. |
 | **Underground** | Street graph with junctions at every crossing; a service lateral per building; gravity sewers sized by Manning and laid at Ten-State minimum slopes with lift stations and force mains; looped water mains fed from elevated tanks and a treatment plant; a power station, substations, 11 kV feeders and 110 kV transmission; metro stations at district landmarks with tunnels bored below every foundation; utility galleries under arcology boulevards. |
 | **Simulation** | A time axis: the city is founded at the strongest antinode near the drive point and grows outward along its streets on an exponential built-up curve; buildings age on Weibull lifetimes and are rebuilt denser within the same structural limits; every keyframe is a complete city with its networks rebuilt. An hourly flow model: Hazen-Williams pressure along the water mains, three-phase voltage drop along the feeders, Manning partial-flow depth in the sewers, a gravity-model commute on the metro. Failure analysis: fail any asset and see who loses service; N-1 resilience per network. |
+| **People** | A commuting population drawn from the buildings' residents and jobs: workplaces by a gravity model on street distance, walk / metro / car by door-to-door time, cars assigned to the streets with congestion; Hansen accessibility and a land-value index per lot; the zoning the land market would produce against the wave's; street widths judged by the flow they carry; metro ridership earned and handed to the flow model. |
 | **Checks** | Street share, street density, open space, residents/ha, tallest vs. material limit, most slender building, walking reach, road clearance, terrace steps, pattern sharpness, sewer slope and depth, water velocity and pressure, substation loading, tunnel clearance. |
 | **Viewer** | Surface / X-ray / Underground views, layer chips, pipe exaggeration, section cut, orbit + WASD/QE fly, full zoom, click-to-inspect anything with a Focus action, themes, custom settlements, profiles, PNG and zip export (OBJ + JSON + profile). |
 
@@ -63,7 +65,9 @@ Captured headless from the page in this repository (`docs/screenshots/`).
 | ![Relief terrain](docs/screenshots/16-terrain-relief.webp) **Relief.** The wave is the ground: lobes rise, troughs flood, streets bridge the lakes. | ![Bridges](docs/screenshots/17-terrain-bridges.webp) **Bridges and embankments.** Decks one freeboard above the water on piers; shore streets embanked to the same level. |
 | ![Sewers on terrain](docs/screenshots/18-terrain-sewers-underground.webp) **Sewers on the heightfield.** Inverts fall with the ground; plants sit on the lowest perimeter; valves cap pressure in the basins. | ![Canals](docs/screenshots/19-terrain-canals.webp) **Valleys with canals.** Every lobe a hill, the sand lines flooded: a town of islands and causeways. |
 | ![Fantasy theme](docs/screenshots/13-fantasy-theme.webp) **High-fantasy theme.** A custom settlement in living wood with realism off: the engine builds what the pattern asks for and the checks say what would stand. | ![Hive theme, X-ray](docs/screenshots/14-hive-xray.webp) **Alien hive, X-ray.** Same engineering, different names and colours. |
-| ![Sphere relief](docs/screenshots/20-terrain-sphere.webp) **Relief on a sphere.** Radial terrain, with seas in the troughs. | ![Phone layout](docs/screenshots/15-phone.webp) **Phone.** The panel becomes a sheet; everything still works at 390 px. |
+| ![Sphere relief](docs/screenshots/20-terrain-sphere.webp) **Relief on a sphere.** Radial terrain, with seas in the troughs. | ![Traffic](docs/screenshots/21-traffic.webp) **Peak-hour traffic.** Streets coloured by volume over capacity after the commute is assigned; this plan has street to spare. |
+| ![Land value](docs/screenshots/22-land-value.webp) **Land value.** Accessibility to jobs, amplitude and the metro, brightest where the market would pay most. | ![Market zoning](docs/screenshots/23-market-zoning.webp) **Market zoning vs. the wave's.** Orange where the land market would put the core; red-tinted lots disagree with the zoning the pattern assigned. |
+| ![Phone layout](docs/screenshots/15-phone.webp) **Phone.** The panel becomes a sheet; everything still works at 390 px. | |
 
 ## Quick start
 
@@ -148,6 +152,20 @@ Flat terrain reproduces the 1.1 layouts byte for byte.
 
 **Failure.** `impact(layout, infra, { kind, index })` removes one asset and reports the buildings cut off and degraded, people and jobs, and a sentence. Water looks for an alternate path through the loop mains from other tanks; sewers walk the tree upstream; power uses connectivity of the logical 110 kV lines to any source; metro reports the share of daily trips that lose their route. `resilience()` scores each network's worst single failure. Because backup lines are only useful if they don't share a trench, the grid is built with a second injection point (a grid intertie on the far side), substation-to-substation backup lines routed away from busy trenches, and N-1 scored per **corridor** (every line in one trench fails together). Dense arcologies with few corridors cannot reach the 20 % target and say so.
 
+## People, traffic, land value
+
+`people(layout, infra, { origins, iterations })` (src/people.js) runs after the networks:
+
+- **Population.** Residents and jobs per street node from the service laterals; 55 % of residents commute, never more than there are jobs. 160 origins are drawn in proportion to residents and every residential node is attached to its nearest origin by street distance, so each origin carries its whole cell's commuters (seeded, deterministic).
+- **Destinations.** A gravity model on street-network distance, `P(j) ∝ jobs_j · exp(−d / 5 km)`, 48 destinations per origin drawn once and kept across passes.
+- **Modes.** Walk by distance (half at 1.2 km); metro vs. car by door-to-door minutes in a logit (0.12/min): walk to the nearest stations within 1.2 km, 5 min wait, 35 km/h along the tunnel tree, against congested street time plus 8 min for parking and the walk at both ends. The metro share is **earned**, and the viewer hands the ridership to `flows()` in place of the 35 % assumption.
+- **Assignment.** 25 % of commute trips start in the peak hour at 1.3 persons per car; cars take the time-shortest path, with BPR delay `t = t₀ (1 + 0.15 (v/c)⁴)` on lanes = ⌊(width − 6 m) / 3.5 m⌋ at 1,800 veh/h; three all-or-nothing passes averaged (MSA). Per edge: flow, v/c, speed, lanes needed.
+- **Land value.** Hansen accessibility `Σ jobs_j · exp(−d / 5 km)` at the origins, reported relative to the city; value index = 0.6 · access^0.7 + 0.25 · amplitude + 0.15 · metro proximity, best lot = 1. **Market zoning** by value rank (top 15 % core, next 35 % mixed) is compared with the zoning the wave assigned and reported, not enforced.
+- **Checks:** `street-capacity`, `street-width` (lengths that need more lanes or have three spare), `commute`, `mode-share`, `zoning`.
+- **Viewer:** Run people and traffic; colour the city by traffic, land value or market zoning; flow, load and lanes on every street you click; value, access and market zoning on every building; `people.json` in the export.
+
+Sources and tunables: `docs/research-notes/people_traffic.md`. Not modelled: non-commute trips, signals, parking supply, route choice between equal paths, value feedback on growth.
+
 ## Realism and fantasy
 
 The engine is one set of equations with two switches:
@@ -194,12 +212,19 @@ A profile is the complete recipe for a city: every engine parameter plus the the
 | `sewerMinSlope(D, g)`, `foundationDepth(b)`, `underground(layout, P, depth)`, `infraToOBJ` | Rules and helpers. |
 | `SEWER`, `WATER`, `POWER`, `TRANSIT`, `UTILIDOR` | Design constants with their sources in the comments. |
 
+`src/people.js`:
+
+| Export | Purpose |
+|---|---|
+| `people(layout, infra, { origins, iterations, onProgress })` | `{ sample{origins, commuters}, trips{total, meanKm, meanMin, modeShare, assigned}, traffic{edgeFlow[], vc[], speedKmh[], lanes[], lanesNeeded[], capacity[], congestedKm, vkt, underbuiltKm, overbuiltKm}, access[] (per node), landValue[] (per building), emergentZone[], zoneAgreement, stats, checks }`. |
+| `TRAFFIC`, `LAND`, `laneCount`, `edgeCapacity`, `freeFlowMinutes`, `bprMinutes`, `landValueOf` | Constants and formulas (mutable objects, so a master engine can retune them). |
+
 `src/simulation.js`:
 
 | Export | Purpose |
 |---|---|
 | `simulate(layout, { years, keyframes, onKeyframe })` | `{ years, founding, history[{building, built, distance, generations[{year, floors, h}]}], keyframes[{year, layout, infra, stats}], events[] }`. |
-| `flows(layout, infra, hour, { hazenC })` | `{ hour, water{nodePressure[], minPressure, lowNodes, criticalNodes, totalFlow, mains[], staticKPa}, power{nodeVoltage[], minPu, underVoltage, feeders[], substations[], totalMVA, blend}, sewer{pipes[{fullness, surcharged}], surcharged, maxFullness}, transit{links[{loadAB, loadBA, capacity, loadFactor}], stations[], dailyTrips, hourTrips, maxLoadFactor}, flags[] }`. |
+| `flows(layout, infra, hour, { hazenC, modeShare, metroTrips })` | `{ hour, water{nodePressure[], minPressure, lowNodes, criticalNodes, totalFlow, mains[], staticKPa}, power{nodeVoltage[], minPu, underVoltage, feeders[], substations[], totalMVA, blend}, sewer{pipes[{fullness, surcharged}], surcharged, maxFullness}, transit{links[{loadAB, loadBA, capacity, loadFactor}], stations[], dailyTrips, hourTrips, maxLoadFactor}, flags[] }`. |
 | `impact(layout, infra, { kind, index })` | `{ affected[], degraded[], people, degradedPeople, jobs, share, summary, … }` for tower, waterplant, water, treatment, lift, sewer, plant, substation, power, transmission, transit, station. |
 | `resilience(layout, infra)` | `{ water, power, sewer, transit }` each `{ worstShare, worst{kind, index}, score }`. |
 | `PROFILES`, `PEAK_HOUR`, `GROWTH`, `LIFETIMES`, `POWER_FLOW`, `hazenWilliams`, `voltageDrop`, `partialFlowDepth`, `cableFor`, `cityStats` | Constants and formulas. |
@@ -246,9 +271,9 @@ The engine was built to be one stage in a larger pipeline:
 
 ## Verification
 
-- `npm test` runs 89 tests in about four minutes: Bessel values and zeros against scipy, spherical-harmonic orthonormality, mode norms by numerical integration, the square-plate corner convention, drive-point coupling, analytic nodal sets for boulevards, brute-force road-clearance and overlap checks on sampled cities, structural limits across every plate × preset, gravity scaling, OBJ winding and index validity, zip validity (checked with Python's `zipfile`), determinism, input validation; and for the underground, sewer slope/depth/flow conservation, force mains, looped mains and trunk flows, substation ratings and feeder accumulation, junctions at every crossing, brute-force tunnel-clearance over every building, connector lengths, and timing; and for the simulation, profile means and shapes, Hazen-Williams and voltage-drop hand-worked cases, strict head and voltage loss along every loaded main and feeder, Manning partial flow at the design peak, metro conservation and AM/PM reversal link by link, growth determinism and nesting, structural caps through densification, keyframe stats recomputed, impact sets, and agreement between the N-1 tiles and the failure model; and for terrain, flat-mode byte identity, ground and freeboard rules for every building and street, bridges that really cross water, one height per plan point, the reported grade against a recompute, arcology faces to open ground by brute force, sewer inverts against the heightfield, plant and tank siting, static heads within limits with valves exercised on 40 m of relief, elevation heads in the flow model, and keyframes that keep it all.
+- `npm test` runs 98 tests in about five minutes: Bessel values and zeros against scipy, spherical-harmonic orthonormality, mode norms by numerical integration, the square-plate corner convention, drive-point coupling, analytic nodal sets for boulevards, brute-force road-clearance and overlap checks on sampled cities, structural limits across every plate × preset, gravity scaling, OBJ winding and index validity, zip validity (checked with Python's `zipfile`), determinism, input validation; and for the underground, sewer slope/depth/flow conservation, force mains, looped mains and trunk flows, substation ratings and feeder accumulation, junctions at every crossing, brute-force tunnel-clearance over every building, connector lengths, and timing; and for the simulation, profile means and shapes, Hazen-Williams and voltage-drop hand-worked cases, strict head and voltage loss along every loaded main and feeder, Manning partial flow at the design peak, metro conservation and AM/PM reversal link by link, growth determinism and nesting, structural caps through densification, keyframe stats recomputed, impact sets, and agreement between the N-1 tiles and the failure model; and for terrain, flat-mode byte identity, ground and freeboard rules for every building and street, bridges that really cross water, one height per plan point, the reported grade against a recompute, arcology faces to open ground by brute force, sewer inverts against the heightfield, plant and tank siting, static heads within limits with valves exercised on 40 m of relief, elevation heads in the flow model, and keyframes that keep it all; and for people, trip conservation, vehicle-kilometres against car trips times their paths, flow only on shortest-path trees, BPR and capacity by hand, response to congestion and averaging that is really an average, land value monotone in its inputs and rank-correlated with access, zoning as value bands, the earned ridership carried by the flow model, determinism, and empty cities.
 - The page is rendered headless (Playwright + Chromium) at desktop and phone widths through every view mode, with picking, fly controls and the section cut exercised.
-- Four independent review passes (city layer, underground, simulation, terrain) each found real defects that were then fixed and re-verified: the square-plate coordinate convention, modal normalisation, inverted OBJ winding, tunnels missing foundations on long edges, streets crossing without junctions, undersized trunk mains, backup power lines sharing trenches with the lines they backed up, a slope cap reading the circle's scale wrong, valves starving the runs that climbed below them, 4 m steps at bridge abutments, and three tests that could not fail (now they can: mutation-tested).
+- Five independent review passes (city layer, underground, simulation, terrain, people) each found real defects that were then fixed and re-verified: the square-plate coordinate convention, modal normalisation, inverted OBJ winding, tunnels missing foundations on long edges, streets crossing without junctions, undersized trunk mains, backup power lines sharing trenches with the lines they backed up, a slope cap reading the circle's scale wrong, valves starving the runs that climbed below them, 4 m steps at bridge abutments, and three tests that could not fail (now they can: mutation-tested); in the people model, destination sampling noise masquerading as equilibrium, a metro hand-off on the wrong base (+82 % ridership on the megastructure), and a sphere road-matching bug.
 
 ## Limits and honesty
 
@@ -265,9 +290,10 @@ The engine was built to be one stage in a larger pipeline:
 src/cymatic-engine.js     physics, plan, buildings, structure, export
 src/infrastructure.js     street graph and every underground network
 src/simulation.js         time axis, hourly flows, failure analysis
+src/people.js             population, commuting, traffic assignment, land value
 src/viewer.html           the 3D page (three.js from a CDN, everything else inline)
 build.mjs                 inlines the modules into dist/
-test/                     physics, city, export, infrastructure, simulation and terrain suites
+test/                     physics, city, export, infrastructure, simulation, terrain and people suites
 docs/screenshots/         the gallery above, captured headless
 research_notes/           cymatics physics, city realism, cymatic-architecture claims, utility standards
 reports/                  the research report behind the design
