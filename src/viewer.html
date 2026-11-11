@@ -351,7 +351,7 @@ textarea { font: 400 var(--step--1)/1.3 var(--mono); resize: vertical; }
       <section>
         <h2>Simulation</h2>
         <div class="inline">
-          <label class="field" for="sim-years" style="flex:1">Horizon (years)<input type="number" id="sim-years" min="10" max="400" step="10" value="120"></label>
+          <label class="field" for="sim-years" style="flex:1">Horizon (years)<input type="number" id="sim-years" min="10" max="400" step="10" value="100"></label>
           <button class="primary" id="sim-run" style="align-self:end">Simulate growth</button>
         </div>
         <div id="sim-progress" class="hint" hidden></div>
@@ -502,8 +502,12 @@ function terrainSpec() {
 }
 // the field preview needs the heightmap grid, which the layout's meta does not carry
 const previewTerrain = (mt) => (mt && mt.mode === "heightmap" ? (heightmapData ? { ...mt, heightmap: { width: heightmapData.width, height: heightmapData.height, data: heightmapData.data } } : "flat") : (mt ?? "flat"));
+// the growth horizon: years until the plan is built out. A year of a city's life only means something with it,
+// so it travels in the profile whenever it is not the default
+const DEFAULT_HORIZON = 100;
+const horizonYears = () => Math.max(10, Math.min(400, parseInt($("sim-years").value, 10) || DEFAULT_HORIZON));
 // a profile is everything needed to reproduce a city, plus the theme
-const profileOf = () => { const p = { engine: ENGINE_VERSION, ...engineParams(), theme: params.theme }; if (p.terrain?.heightmap) p.terrain = { ...p.terrain, heightmap: { width: p.terrain.heightmap.width, height: p.terrain.heightmap.height, note: "grid not included; load the PNG again" } }; return p; };
+const profileOf = () => { const p = { engine: ENGINE_VERSION, ...engineParams(), theme: params.theme }; if (horizonYears() !== DEFAULT_HORIZON) p.horizon = horizonYears(); if (p.terrain?.heightmap) p.terrain = { ...p.terrain, heightmap: { width: p.terrain.heightmap.width, height: p.terrain.heightmap.height, note: "grid not included; load the PNG again" } }; return p; };
 function applyProfile(p) {
   if (!p || typeof p !== "object") throw new Error("Not a profile");
   const n = { ...DEFAULTS, custom: { base: "city" } };
@@ -522,6 +526,7 @@ function applyProfile(p) {
     const t = typeof p.terrain === "string" ? { mode: p.terrain } : p.terrain;
     n.terrain = { mode: TERRAIN_MODES.includes(t.mode) ? t.mode : "flat", relief: Number.isFinite(+t.relief) && t.relief !== "auto" && t.relief != null ? +t.relief : null, waterLevel: Number.isFinite(+t.waterLevel) && t.waterLevel !== "auto" && t.waterLevel != null ? +t.waterLevel : null, canals: !!t.canals };
   }
+  $("sim-years").value = Number.isFinite(+p.horizon) && p.horizon != null ? Math.max(10, Math.min(400, Math.round(+p.horizon))) : DEFAULT_HORIZON;
   params = n; applyTheme(); regenerate(0);
 }
 
@@ -1464,7 +1469,7 @@ function clearSimulation() {
 }
 $("sim-run").addEventListener("click", async () => {
   if (!baseLayout) return;
-  const years = Math.max(10, Math.min(400, parseInt($("sim-years").value, 10) || 120));
+  const years = horizonYears();
   const keyframes = 6;
   $("sim-run").disabled = true; $("sim-progress").hidden = false; $("sim-progress").textContent = "Founding the city…";
   try {
