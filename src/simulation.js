@@ -111,10 +111,13 @@ export function cityStats(layout) {
 }
 
 // ---------------------------------------------------------------- growth
-export function simulate(layout, opts = {}) {
+// Growth is three steps: schedule() decides when everything is built (all the random draws happen here),
+// frameAt() assembles the complete city as it stood at one year, and simulate() is the schedule plus K frames
+// and the event log. The schedule depends on the horizon (`years`): growth is paced to finish the plan at the
+// horizon, so the same year under two horizons is two different cities. It does not depend on K.
+export function schedule(layout, opts = {}) {
   if (!layout.buildings.length) throw new Error('Nothing to simulate: the city has no buildings (is everything under water?)');
   const years = Math.max(5, Number(opts.years ?? 100));
-  const K = Math.max(2, Math.min(24, Number(opts.keyframes ?? 8)));
   const infra = layout.infra ?? buildInfrastructure(layout);
   const meta = layout.meta, graph = infra.graph;
   const rng = mulberry32((meta.seed * 7919 + 101) >>> 0);
@@ -211,44 +214,73 @@ export function simulate(layout, opts = {}) {
     if (e > 0 && y < (eraStart[e] ?? Infinity)) y = Math.min(routeYear[i], eraStart[e] ?? Infinity);
     return y;
   });
+  return { years, chord, founding: { building: fb, node: founding }, history, roadYear, eraStart };
+}
 
-  // keyframes: complete cities at K years, networks rebuilt for what exists
+// The complete city at one year of a schedule: what is built, at the height of its day, the streets that are
+// open, and the networks rebuilt for what exists. Draws no random numbers.
+export function frameAt(layout, sched, year) {
+  const { history, roadYear, eraStart, chord } = sched, meta = layout.meta;
+  const buildings = [];
+  for (const h of history) {
+    if (h.built > year) continue;
+    let g = h.generations[0];
+    for (const gg of h.generations) if (gg.year <= year) g = gg;
+    const b = layout.buildings[h.building];
+    buildings.push({ ...b, floors: g.floors, h: b.shape === 'dome' ? Math.min(g.h, 0.6 * Math.min(b.w, b.d)) : g.h, built: h.built, rebuilt: g.year, source: h.building });
+  }
+  // a later voice's street that an older route opened early was built by the voice of its day: credit it to that
+  // voice, and keep whose sand lines it follows
+  const builtBy = (y) => { let e = 0; eraStart.forEach((ys, k) => { if (ys != null && ys <= y) e = Math.max(e, k); }); return e; };
+  const roads = [];
+  layout.roads.forEach((rd, i) => {
+    if (roadYear[i] > year) return;
+    const e = chord ? rd.era ?? 0 : 0;
+    if (e > 0 && roadYear[i] < (eraStart[e] ?? Infinity)) roads.push({ ...rd, era: builtBy(roadYear[i]), follows: e });
+    else roads.push(rd);
+  });
+  const trees = layout.trees;
+  const sub = { meta: { ...meta, year }, roads, buildings, trees, stats: { ...layout.stats }, checks: [] };
+  const inf = buildInfrastructure(sub);
+  sub.infra = inf;
+  const roadLen = roads.reduce((a, rd) => a + dist(rd.a, rd.b), 0), roadArea = roads.reduce((a, rd) => a + dist(rd.a, rd.b) * rd.w, 0);
+  const cs = cityStats(sub);
+  sub.stats = { ...layout.stats, ...cs, roadSegments: roads.length, roadLengthKm: roadLen / 1000, streetDensity: roadLen / 1000 / (meta.world.area / 1e6), roadShare: roadArea / meta.world.area,
+    densityPerHa: cs.population / (meta.world.area / 1e4), tallest: buildings.reduce((m, b) => Math.max(m, b.floors), 0),
+    maxSlenderness: buildings.reduce((m, b) => (b.shape === 'dome' || b.shape === 'terrace' ? m : Math.max(m, b.h / Math.min(b.w, b.d))), 0) };
+  sub.checks = checksFor(sub.meta, sub.stats);
+  const stats = { year, ...cs, roadSegments: roads.length };
+  return { year, layout: sub, infra: inf, stats };
+}
+
+// The city as it stood at `year` of a growth that completes the plan at `horizon` years. Equal to the keyframe
+// simulate(layout, { years: horizon }) gives at that year, for any year, not only the keyframe years.
+export function cityAt(layout, opts = {}) {
+  const show = (v) => (typeof v === 'string' ? JSON.stringify(v) : String(v));
+  const horizon = opts.horizon === undefined ? 100 : opts.horizon, y = opts.year;
+  if (typeof horizon !== 'number' || !Number.isFinite(horizon) || horizon < 5) throw new Error(`cityAt: horizon must be a number of years, 5 or more (got ${show(horizon)})`);
+  if (typeof y !== 'number' || !Number.isFinite(y)) throw new Error(`cityAt: year must be a number (got ${show(y)}; horizon ${horizon})`);
+  const year = Math.round(10 * y) / 10;
+  if (!(year > 0 && year <= horizon)) throw new Error(`cityAt: year ${y} is outside the growth: it must be above 0 and at most the horizon, ${horizon}`);
+  const sched = schedule(layout, { years: horizon });
+  try { return frameAt(layout, sched, year); }
+  catch (e) { throw new Error(`cityAt: nothing can be built as early as year ${year} of ${horizon} (${e.message})`); }
+}
+
+// keyframes: complete cities at K years, networks rebuilt for what exists
+export function simulate(layout, opts = {}) {
+  const K = Math.max(2, Math.min(24, Number(opts.keyframes ?? 8)));
+  const sched = schedule(layout, opts);
+  const { years, history, chord } = sched;
+  const eraOf = (b) => (chord ? b.era ?? 0 : 0);
   const keyframes = [];
   const events = [];
   let prevStats = null;
   for (let k = 0; k < K; k++) {
     // keyframes at even steps of time: the early frames are the small town the city grew from
     const year = k === K - 1 ? years : Math.round(10 * (years * (k + 1)) / K) / 10;
-    const buildings = [];
-    for (const h of history) {
-      if (h.built > year) continue;
-      let g = h.generations[0];
-      for (const gg of h.generations) if (gg.year <= year) g = gg;
-      const b = layout.buildings[h.building];
-      buildings.push({ ...b, floors: g.floors, h: b.shape === 'dome' ? Math.min(g.h, 0.6 * Math.min(b.w, b.d)) : g.h, built: h.built, rebuilt: g.year, source: h.building });
-    }
-    // a later voice's street that an older route opened early was built by the voice of its day: credit it to that
-    // voice, and keep whose sand lines it follows
-    const builtBy = (y) => { let e = 0; eraStart.forEach((ys, k) => { if (ys != null && ys <= y) e = Math.max(e, k); }); return e; };
-    const roads = [];
-    layout.roads.forEach((rd, i) => {
-      if (roadYear[i] > year) return;
-      const e = chord ? rd.era ?? 0 : 0;
-      if (e > 0 && roadYear[i] < (eraStart[e] ?? Infinity)) roads.push({ ...rd, era: builtBy(roadYear[i]), follows: e });
-      else roads.push(rd);
-    });
-    const trees = layout.trees;
-    const sub = { meta: { ...meta, year }, roads, buildings, trees, stats: { ...layout.stats }, checks: [] };
-    const inf = buildInfrastructure(sub);
-    sub.infra = inf;
-    const roadLen = roads.reduce((a, rd) => a + dist(rd.a, rd.b), 0), roadArea = roads.reduce((a, rd) => a + dist(rd.a, rd.b) * rd.w, 0);
-    const cs = cityStats(sub);
-    sub.stats = { ...layout.stats, ...cs, roadSegments: roads.length, roadLengthKm: roadLen / 1000, streetDensity: roadLen / 1000 / (meta.world.area / 1e6), roadShare: roadArea / meta.world.area,
-      densityPerHa: cs.population / (meta.world.area / 1e4), tallest: buildings.reduce((m, b) => Math.max(m, b.floors), 0),
-      maxSlenderness: buildings.reduce((m, b) => (b.shape === 'dome' || b.shape === 'terrace' ? m : Math.max(m, b.h / Math.min(b.w, b.d))), 0) };
-    sub.checks = checksFor(sub.meta, sub.stats);
-    const stats = { year, ...cs, roadSegments: roads.length };
-    keyframes.push({ year, layout: sub, infra: inf, stats });
+    const frame = frameAt(layout, sched, year), { stats, infra: inf } = frame;
+    keyframes.push(frame);
     opts.onKeyframe?.(k, { year, stats }, keyframes[k]);
     const replaced = history.filter((h) => h.generations.some((g, i) => i > 0 && g.year <= year && g.year > (keyframes[k - 1]?.year ?? -1))).length;
     const built = history.filter((h) => h.built <= year && h.built > (keyframes[k - 1]?.year ?? -1)).length;
@@ -263,7 +295,7 @@ export function simulate(layout, opts = {}) {
     eraStarts = layout.meta.chord.map((v, e) => { let first = Infinity; history.forEach((h) => { if (eraOf(layout.buildings[h.building]) === e) first = Math.min(first, h.built); }); return { era: e, hz: v.hz, year: Number.isFinite(first) ? first : null }; });
     for (const ev of events) for (const es of eraStarts) if (es.year != null && es.era > 0 && es.year <= ev.year && es.year > (events[events.indexOf(ev) - 1]?.year ?? -1)) ev.note += `, voice ${es.era + 1} (${Math.round(es.hz)} Hz) breaks ground`;
   }
-  return { years, founding: { building: fb, node: founding }, history, keyframes, events, eraStarts };
+  return { years, founding: sched.founding, history, keyframes, events, eraStarts };
 }
 function describeKeyframe(k, built, replaced, s, prev) {
   const bits = [`${built} built`];

@@ -351,7 +351,7 @@ textarea { font: 400 var(--step--1)/1.3 var(--mono); resize: vertical; }
       <section>
         <h2>Simulation</h2>
         <div class="inline">
-          <label class="field" for="sim-years" style="flex:1">Horizon (years)<input type="number" id="sim-years" min="10" max="400" step="10" value="120"></label>
+          <label class="field" for="sim-years" style="flex:1">Horizon (years)<input type="number" id="sim-years" min="10" max="400" step="10" value="100"></label>
           <button class="primary" id="sim-run" style="align-self:end">Simulate growth</button>
         </div>
         <div id="sim-progress" class="hint" hidden></div>
@@ -434,9 +434,12 @@ textarea { font: 400 var(--step--1)/1.3 var(--mono); resize: vertical; }
       <section>
         <h2>Save</h2>
         <div class="actions">
-          <button class="primary" id="save-model">3D model (.zip: OBJ + JSON)</button>
+          <button class="primary" id="save-model">3D model (.zip: GLB, OBJ, JSON)</button>
           <button id="save-png">Image (.png)</button>
         </div>
+        <label class="field" for="geo-origin">Map origin for GeoJSON (latitude, longitude), optional
+          <input type="text" id="geo-origin" inputmode="decimal" placeholder="45.07, 7.69" autocomplete="off">
+        </label>
         <p class="hint" id="status"></p>
       </section>
 
@@ -502,8 +505,12 @@ function terrainSpec() {
 }
 // the field preview needs the heightmap grid, which the layout's meta does not carry
 const previewTerrain = (mt) => (mt && mt.mode === "heightmap" ? (heightmapData ? { ...mt, heightmap: { width: heightmapData.width, height: heightmapData.height, data: heightmapData.data } } : "flat") : (mt ?? "flat"));
+// the growth horizon: years until the plan is built out. A year of a city's life only means something with it,
+// so it travels in the profile whenever it is not the default
+const DEFAULT_HORIZON = 100;
+const horizonYears = () => Math.max(10, Math.min(400, parseInt($("sim-years").value, 10) || DEFAULT_HORIZON));
 // a profile is everything needed to reproduce a city, plus the theme
-const profileOf = () => { const p = { engine: ENGINE_VERSION, ...engineParams(), theme: params.theme }; if (p.terrain?.heightmap) p.terrain = { ...p.terrain, heightmap: { width: p.terrain.heightmap.width, height: p.terrain.heightmap.height, note: "grid not included; load the PNG again" } }; return p; };
+const profileOf = () => { const p = { engine: ENGINE_VERSION, ...engineParams(), theme: params.theme }; if (horizonYears() !== DEFAULT_HORIZON) p.horizon = horizonYears(); if (p.terrain?.heightmap) p.terrain = { ...p.terrain, heightmap: { width: p.terrain.heightmap.width, height: p.terrain.heightmap.height, note: "grid not included; load the PNG again" } }; return p; };
 function applyProfile(p) {
   if (!p || typeof p !== "object") throw new Error("Not a profile");
   const n = { ...DEFAULTS, custom: { base: "city" } };
@@ -522,6 +529,7 @@ function applyProfile(p) {
     const t = typeof p.terrain === "string" ? { mode: p.terrain } : p.terrain;
     n.terrain = { mode: TERRAIN_MODES.includes(t.mode) ? t.mode : "flat", relief: Number.isFinite(+t.relief) && t.relief !== "auto" && t.relief != null ? +t.relief : null, waterLevel: Number.isFinite(+t.waterLevel) && t.waterLevel !== "auto" && t.waterLevel != null ? +t.waterLevel : null, canals: !!t.canals };
   }
+  $("sim-years").value = Number.isFinite(+p.horizon) && p.horizon != null ? Math.max(10, Math.min(400, Math.round(+p.horizon))) : DEFAULT_HORIZON;
   params = n; applyTheme(); regenerate(0);
 }
 
@@ -565,6 +573,7 @@ function applyTheme() {
 let WORKER_URL = null; // the engine worker's source, reused for a search worker that can be stopped
 let worker = null, jobId = 0, pendingTimer = 0, layout = null, baseLayout = null, lastFrameKey = "";
 let sim = null, simJob = 0, currentKeyframe = -1;
+let groundSampler = null; // (x, z) → ground height of the city on screen, for the glTF export
 const pending = new Map(); // id → { resolve, reject, onProgress }
 try {
   const src = $("engine-src").textContent + `
@@ -796,6 +805,7 @@ function show(L) {
   const F = fieldPreview({ frequency: m0.frequency, plate: m0.plate, preset: m0.preset, Q: m0.Q, fundamentalHz: m0.fundamentalHz,
     driveOffset: m0.driveOffset, azimuthal: m0.azimuthal, gravity: m0.gravity, material: m0.material, terrain: previewTerrain(m0.terrain), ...(m0.chord ? { chord: m0.chord.map(({ hz, weight }) => ({ hz, weight })) } : {}) }); // the ground and the plate's colours follow the whole chord
   const T = F.terrain, hilly = T.mode !== "flat", waterLevel = Number.isFinite(T.waterLevel) ? T.waterLevel : -Infinity;
+  groundSampler = F.kind === "plane" ? (x, z) => T.z(...F.toNorm([x, 0, z])) : null; // the glTF export lays its ground with this
   disposeWorld();
   const style = L.meta.presetSpec?.style ?? PRESETS[L.meta.preset]?.style ?? "city";
   const pal = { ...PALETTES[style], ...(THEMES[params.theme]?.palette ?? {}) };
@@ -1464,7 +1474,7 @@ function clearSimulation() {
 }
 $("sim-run").addEventListener("click", async () => {
   if (!baseLayout) return;
-  const years = Math.max(10, Math.min(400, parseInt($("sim-years").value, 10) || 120));
+  const years = horizonYears();
   const keyframes = 6;
   $("sim-run").disabled = true; $("sim-progress").hidden = false; $("sim-progress").textContent = "Founding the city…";
   try {
@@ -1853,12 +1863,26 @@ $("save-model").addEventListener("click", () => {
     `Frequency: ${m.frequency} Hz (${m.note}) on a ${m.plateLabel.toLowerCase()}`, `Settlement: ${m.presetLabel}, seed ${m.seed}, Q ${m.Q}, gravity ${m.gravity} g, ${m.materialLabel}`,
     `Dominant mode: ${m.dominant} (${m.symmetry})`, ``,
     `${s.buildings} buildings, ${s.roadLengthKm.toFixed(1)} km of streets, about ${s.population} residents and ${s.jobs} jobs.`, ``,
+    `city.glb: binary glTF 2.0 in metres, y up, for Blender, Godot, Unreal and the web. One node per building (named b<number>, with its district, zone, floors and era as extras) sharing one mesh per shape and colour, streets per kind, trees, the ground, and the networks as lines at their true depths.`,
+    `city.city.json (flat plates): CityJSON 2.0 in local metres (X east, Y north, Z up): every building a Solid with ground, wall and roof surfaces, streets as traffic areas.`,
+    `city.geojson (when a map origin was entered): RFC 7946 GeoJSON with building footprints, streets, trees and the networks, placed on the Earth at that origin.`,
     `city.obj: Wavefront OBJ in metres, y up. One object per building (prisms) and per road segment (flat strips); the networks follow as line objects (sewer_pipes, water_mains, power_feeders, power_transmission, transit_tunnels, utility_tunnels) at their true depths.`,
     `layout.json: every road segment, building (position, up, forward, width, depth, height, floors, zone, phase) and tree, plus stats and checks, and "infra": the street graph (nodes, edges), service laterals, sewer pipes (diameter, slope, depths, flow), lift stations, treatment plants, water mains and tanks, power plant, substations, feeders and transmission, metro stations and tunnels, utility tunnels.`,
     `profile.json: the exact settings (and theme) that made this city; paste it into the engine's "Apply pasted profile" box or pass it to generateCity().`,
     `simulation.json (when simulated): growth events and per-keyframe stats; flows-HHMM.json (when flows are on): pressures, voltages, fullness and metro loads for that hour; people.json (when run): peak-hour flow, v/c, speed and lanes per street-graph edge, accessibility per node, land value and market zoning per building, trip statistics.`,
     `Same settings + same seed reproduce this layout exactly.`].join("\n");
-  const files = [{ name: "city.obj", text: toOBJ(layout) }, { name: "layout.json", text: toJSON(layout) }, { name: "profile.json", text: JSON.stringify(profileOf(), null, 2) }, { name: "README.txt", text: readme }];
+  const flatPlate = layout.meta.plate !== "sphere", withNets = !!layout.infra;
+  const files = [{ name: "city.glb", bytes: toGLB(layout, { infra: withNets, paint: $("paint").value === "era" ? "era" : "zone", elevation: groundSampler ?? undefined, horizon: sim ? sim.years : undefined }) }];
+  if (flatPlate) files.push({ name: "city.city.json", text: toCityJSON(layout, { horizon: sim ? sim.years : undefined }) });
+  const originText = $("geo-origin").value.trim();
+  if (originText) {
+    const origin = originText.split(/[\s,;]+/).map(Number);
+    try {
+      if (!flatPlate) throw new Error("GeoJSON: a sphere plate is not a map of the Earth");
+      files.push({ name: "city.geojson", text: toGeoJSON(layout, { origin, infra: withNets, horizon: sim ? sim.years : undefined }) });
+    } catch (err) { $("status").textContent = `${err.message}. Nothing was saved.`; return; }
+  }
+  files.push({ name: "city.obj", text: toOBJ(layout) }, { name: "layout.json", text: toJSON(layout) }, { name: "profile.json", text: JSON.stringify(profileOf(), null, 2) }, { name: "README.txt", text: readme });
   if (sim) files.push({ name: "simulation.json", text: JSON.stringify(sim, null, 1) });
   if (peopleResult) files.push({ name: "people.json", text: JSON.stringify(peopleResult, (k, v) => (ArrayBuffer.isView(v) ? Array.from(v) : v)) });
   if (currentFlows) files.push({ name: `flows-${hourLabel(currentFlows.hour).replace(":", "")}.json`, text: JSON.stringify({ ...currentFlows, water: { ...currentFlows.water, nodePressure: Array.from(currentFlows.water.nodePressure) }, power: { ...currentFlows.power, nodeVoltage: Array.from(currentFlows.power.nodeVoltage) } }) });

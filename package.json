@@ -1,6 +1,6 @@
 {
   "name": "cymatic-city-engine",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "type": "module",
   "private": true,
   "scripts": {
@@ -16,6 +16,8 @@
     "test:chord": "node --test --test-reporter=./test/quiet-reporter.mjs test/chord.test.mjs",
     "test:infrastructure": "node --test --test-reporter=./test/quiet-reporter.mjs test/infrastructure.test.mjs",
     "test:terrain": "node --test --test-reporter=./test/quiet-reporter.mjs test/terrain.test.mjs",
+    "test:time": "node --test --test-reporter=./test/quiet-reporter.mjs test/time.test.mjs",
+    "test:formats": "node --test --test-reporter=./test/quiet-reporter.mjs test/formats.test.mjs",
     "test:city": "node --test --test-reporter=./test/quiet-reporter.mjs test/city.test.mjs",
     "build": "node build.mjs",
     "city": "node bin/cymatic.mjs",
@@ -28,7 +30,8 @@
     "./infrastructure": "./src/infrastructure.js",
     "./simulation": "./src/simulation.js",
     "./people": "./src/people.js",
-    "./query": "./src/query.js"
+    "./query": "./src/query.js",
+    "./export": "./src/export.js"
   },
   "files": [
     "src",
@@ -43,5 +46,8 @@
   "bin": {
     "cymatic": "bin/cymatic.mjs",
     "cymatic-mcp": "bin/cymatic-mcp.mjs"
+  },
+  "devDependencies": {
+    "gltf-validator": "2.0.0-dev.3.10"
   }
 }

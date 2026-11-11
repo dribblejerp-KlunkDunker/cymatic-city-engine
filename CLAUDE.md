@@ -17,15 +17,15 @@ node bin/cymatic.mjs query -f 432 --q '{"from":"streets","orderBy":[{"field":"vc
 node bin/cymatic.mjs help                                    # every command and flag
 ```
 
-Geometry goes to a file (`export --out city.json|city.obj`) and into the conversation as one line: path and
-size. Cost guide for one default city: ~2 s to generate, +1.5 s with `--infra`, +5 s with `--people`; ask for
+Geometry goes to a file (`generate --out city.glb|.gltf|.geojson|.city.json|.obj|.json`, with `--year Y
+[--horizon H]` for the city at a year of its growth) and into the conversation as one line: path and size. Cost guide for one default city: ~2 s to generate, +1.5 s with `--infra`, +5 s with `--people`; ask for
 the extra stages only when the question needs them. The MCP server in `.mcp.json` (`cymatic`) offers the same
 through `generate_city`, `query_city`, `ask_city`, `suggest_metro_station`, `search_plans`. Its `query_city`
 returns 25 rows unless `limit` is set: aggregate or name `fields` before raising it.
 
 ## Finding code
 
-`src/` is ~257 KB and README.md ~52 KB: find with Grep, then read the line range you need.
+`src/` is ~290 KB and README.md ~60 KB: find with Grep, then read the line range you need.
 `grep -n '^## ' README.md` lists its sections; **Module API** and **Data contract** hold signatures and
 shapes. The reason behind a rule or constant lives in `docs/research-notes/<topic>.md`; past review findings
 in CHANGELOG.md; what is next in ROADMAP.md and `docs/PHASE6-SPEC.md`.
@@ -38,6 +38,11 @@ in CHANGELOG.md; what is next in ROADMAP.md and `docs/PHASE6-SPEC.md`.
   Worker). `build.mjs` inlines `src/` into the viewer: a new export the viewer uses goes into its export
   lists, and `src/` stays free of closing script tags.
 - **A chord of one is the plain frequency**, byte for byte.
+- **A year needs its horizon.** Growth is paced to finish at the horizon, so `(profile, year)` names a city
+  only with `horizon` (profile key, default 100). `simulate()` is `schedule()` + `frameAt()`; the golden
+  hashes in `test/time.test.mjs` pin its output, and a deliberate change to growth re-records them.
+- **Exports are deterministic and validated.** `src/export.js` writes the same bytes for the same layout;
+  glTF must pass `gltf-validator` (a devDependency: `npm install`) with 0 errors and 0 warnings.
 - **Contract changes bump `ENGINE_VERSION`** (src/cymatic-engine.js) and get a CHANGELOG entry.
 - **Honest checks.** Every rule reports `{ id, label, value, status: pass|warn|fail|info, basis }`, and
   fantasy (`enforce: false`) still reports what would fail. When a city fails a check, the city changes,
@@ -49,7 +54,7 @@ in CHANGELOG.md; what is next in ROADMAP.md and `docs/PHASE6-SPEC.md`.
 ## Tests
 
 Iterate on the one suite that covers the change: `npm run test:<module>`. Measured, one file at a time:
-physics and export ~1 s each, cli ~7 s (`test:fast` runs all three); simulation 22 s, query 23 s, people 32 s,
+physics and export ~1 s each, cli ~7 s (`test:fast` runs all three); time 12 s, formats 23 s, simulation 22 s, query 23 s, people 32 s,
 terrain 51 s, chord 64 s, infrastructure 69 s, city 102 s. Before committing, `npm run test:quiet` once
 (failures and one totals line). Report counts and failures, not logs.
 

@@ -69,9 +69,11 @@ Each phase lists what ships, what proves it, and the seam it opens for other eng
 
 **Not done (honest gaps):** chords are not searched; the English parser covers templates, not paraphrase; no joins or disjunction in queries; suggestions only for metro stations; one candidate per mode can still miss a frequency of the same mode that a plan-level threshold needs (refinement recovers some); near-misses are ranked by the stages they reached; a 16-city search on the full city preset takes about a minute.
 
-## Phase 6 — Export and headless CLI
+## Phase 6 — Export and headless CLI ✅ (1.6.0)
 
-glTF with instancing (Blender, Unreal, Godot), GeoJSON with a chosen origin for GIS, CityJSON, and `cymatic generate profile.json --year 80 --out city.gltf` so other engines call it without the page.
+Shipped: `src/export.js` (glTF 2.0 with shared meshes and optional `EXT_mesh_gpu_instancing`, GeoJSON with an exact tangent-plane projection, CityJSON 2.0), `cityAt()` for any year of a growth, and `cymatic generate <profile> --year 80 --out city.glb`. Decisions and proofs: `docs/PHASE6-SPEC.md`. Checked beyond the tests: the official CityJSON 2.0.2 schema and a Blender 5.3 import. Still open from the proof list: `cjval`, a Godot import, and the independent review.
+
+The original brief: glTF with instancing (Blender, Unreal, Godot), GeoJSON with a chosen origin for GIS, CityJSON, and `cymatic generate profile.json --year 80 --out city.gltf` so other engines call it without the page.
 
 Proof: exported files validate in their reference validators; round-trip of a profile through the CLI reproduces the viewer's city byte for byte.
 

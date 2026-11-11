@@ -89,7 +89,9 @@ From the command line (summaries, never geometry; `--json` for machine output):
 node bin/cymatic.mjs -f 432                                   # headline stats and the checks that did not pass
 node bin/cymatic.mjs summary --chord 432,540 --plate square --infra --people
 node bin/cymatic.mjs ask -f 432 "which districts lose water if tower 1 fails"
-node bin/cymatic.mjs export -f 432 --out city.obj --infra
+node bin/cymatic.mjs generate -f 432 --out city.glb --infra    # glTF for Blender, Godot, Unreal; also .gltf .geojson .city.json .obj .json
+node bin/cymatic.mjs generate -f 432 --year 80 --out city.glb  # the city 80 years into a 100-year growth (--horizon changes the 100)
+node bin/cymatic.mjs generate -f 432 --preset town --out town.geojson --origin 45.07,7.69   # on the map, for GIS
 node bin/cymatic-mcp.mjs                                      # MCP server: the agent tools over stdio (.mcp.json registers it)
 ```
 
@@ -106,6 +108,12 @@ city.infra = buildInfrastructure(city);
 console.log(city.stats.population, city.infra.stats.sewerKm, city.checks, city.infra.checks);
 const obj = toOBJ(city);      // buildings, roads, and the networks as line objects at true depth
 const json = toJSON(city);    // everything, plain data
+
+import { toGLB, toGeoJSON, toCityJSON } from './src/export.js';
+import { cityAt } from './src/simulation.js';
+const glb = toGLB(city, { infra: true });                      // Uint8Array: binary glTF 2.0
+const map = toGeoJSON(city, { origin: [45.07, 7.69] });        // string: RFC 7946, placed on the Earth
+const young = cityAt(city, { year: 30, horizon: 100 }).layout; // the same city 30 years into its growth
 ```
 
 ## Using the viewer
@@ -120,7 +128,7 @@ const json = toJSON(city);    // everything, plain data
 - **Pipe exaggeration** scales diameters for visibility (depths are always true scale).
 - **Simulate growth** runs the time axis (default 120 years, six keyframes); the **Year** slider walks the keyframes and **plan** returns to the generated plan. The **Hour of day** slider with *Colour the networks by load* runs the flow model and recolours every pipe, cable and tunnel by utilisation (blue–gold–red); the tiles below report the lowest pressure, lowest voltage, busiest substation, fullest sewer and busiest metro link.
 - **Fail this** on any inspected asset (tank, plant, main, treatment plant, lift station, sewer, power station, substation, feeder, transmission corridor, tunnel, station) paints the affected buildings red (cut off) and amber (degraded) and explains the impact. The **Resilience (N-1)** tiles show the worst single failure per network with a Show button.
-- **Save** gives a `.zip` with `city.obj`, `layout.json`, `profile.json`, a README and, when present, `simulation.json` and `flows-HHMM.json`, or a `.png` of the current view.
+- **Save** gives a `.zip` with `city.glb` (glTF with the ground and the networks), `city.city.json` (CityJSON, flat plates), `city.geojson` (when a map origin is typed into the field under the button), `city.obj`, `layout.json`, `profile.json`, a README and, when present, `simulation.json` and `flows-HHMM.json`, or a `.png` of the current view.
 
 ## How a frequency becomes a city
 
@@ -224,6 +232,8 @@ The engine is one set of equations with two switches:
 
 A profile is the complete recipe for a city: every engine parameter plus the theme. **Copy profile** in the viewer puts it on the clipboard; **Apply pasted profile** restores it; the zip export includes `profile.json`. A profile passed to `generateCity()` reproduces the same city anywhere.
 
+A city in time needs one more number. Growth is paced to finish the plan at the **horizon** (100 years unless set), so "year 80" of a 100-year growth and of a 150-year growth are different towns. The profile carries `"horizon"` whenever it is not 100, and `(profile, year)` then names one city exactly: `cityAt(layout, { year, horizon })` in code, `--year` on the command line.
+
 ```json
 { "engine": "1.0.0", "frequency": 432, "plate": "circle", "preset": "custom", "seed": 1, "Q": 100, "inverse": false,
   "custom": { "base": "city", "label": "Elven haven", "coreFloors": 90, "floorH": 4.5 },
@@ -269,9 +279,21 @@ A profile is the complete recipe for a city: every engine parameter plus the the
 |---|---|
 | `simulate(layout, { years, keyframes, onKeyframe })` | `{ years, founding, history[{building, built, distance, generations[{year, floors, h}]}], keyframes[{year, layout, infra, stats}], events[], eraStarts }` (`eraStarts` for chords: when each voice broke ground). |
 | `flows(layout, infra, hour, { hazenC, modeShare, metroTrips })` | `{ hour, water{nodePressure[], minPressure, lowNodes, criticalNodes, totalFlow, mains[], staticKPa}, power{nodeVoltage[], minPu, underVoltage, feeders[], substations[], totalMVA, blend}, sewer{pipes[{fullness, surcharged}], surcharged, maxFullness}, transit{links[{loadAB, loadBA, capacity, loadFactor}], stations[], dailyTrips, hourTrips, maxLoadFactor}, flags[] }`. |
+| `cityAt(layout, { year, horizon = 100 })` | The complete city `{ year, layout, infra, stats }` as it stood at any year (to a tenth) of a growth that builds the plan out at `horizon`: equal to the keyframe `simulate(layout, { years: horizon })` gives at that year. Years outside (0, horizon] are refused. |
+| `schedule(layout, { years })`, `frameAt(layout, schedule, year)` | The two halves of `simulate()`: when everything is built (all the random draws), and the city at one year of that schedule. |
 | `impact(layout, infra, { kind, index })` | `{ affected[], degraded[], people, degradedPeople, jobs, share, summary, … }` for tower, waterplant, water, treatment, lift, sewer, plant, substation, power, transmission, transit, station. |
 | `resilience(layout, infra)` | `{ water, power, sewer, transit }` each `{ worstShare, worst{kind, index}, score }`. |
 | `PROFILES`, `PEAK_HOUR`, `GROWTH`, `LIFETIMES`, `POWER_FLOW`, `hazenWilliams`, `voltageDrop`, `partialFlowDepth`, `cableFor`, `cityStats` | Constants and formulas. |
+
+`src/export.js` (exchange formats; pure and deterministic like the rest):
+
+| Export | Purpose |
+|---|---|
+| `toGLB(layout, opts)` | Binary glTF 2.0 as a `Uint8Array`. `opts`: `paint` (`'zone'` \| `'era'`), `instanced` (use `EXT_mesh_gpu_instancing`), `infra` (the networks as lines; needs `layout.infra`), `trees` (default true), `elevation` (a sampler `(x, z) → y` for the ground of a terrain city, e.g. from `fieldPreview(profile).terrain`), `groundGrid` (default 128), `horizon` (recorded in the file). |
+| `toGLTF(layout, { …opts, binName })` | The same as `{ json, bin }` for a `.gltf` + `.bin` pair. |
+| `toGeoJSON(layout, { origin: [lat, lon], bearing = 0, infra })` | RFC 7946 FeatureCollection string. Flat plates only; the origin is required. `geoProjector(origin, bearing)` is the projection alone: `(x, z) → [lon, lat]`. |
+| `toCityJSON(layout)` | CityJSON 2.0 string in local metres. Flat plates only. |
+| `unitBuildingMesh(shape)`, `EXPORT_COLORS` | The unit mesh every building of a shape instances, and the colours the files use. |
 
 `src/query.js`:
 
@@ -315,6 +337,14 @@ layout
 
 `toOBJ(layout)` writes one object per building (outward-wound prisms), one per road segment (flat strips), then the networks as line objects (`sewer_pipes`, `water_mains`, `power_feeders`, `power_transmission`, `transit_tunnels`, `utility_tunnels`) at true depth.
 
+### Exchange formats
+
+| Format | What is in it | Conventions |
+|---|---|---|
+| glTF 2.0 (`.glb`, `.gltf` + `.bin`) | Root node `city` (its `extras` are the profile inputs, and the year and horizon when given) with groups `buildings`, `roads`, `trees`, `ground`, `water`, `underground`. Each building is a node `b<number>` with translation, rotation and scale over one shared unit mesh per shape and colour; `extras`: `index, district, zone, floors, era, landmark, amp` (+ `built, rebuilt` in a year export). Streets are one mesh per kind, the networks one `LINES` mesh each under the OBJ names. | Metres, y up, right-handed. Explicit flat normals. Materials `zone:<name>` or `era:<n>` in the page's colours. With `instanced`, one node per shape and colour carries `EXT_mesh_gpu_instancing` and per-building `extras` are not written (Blender reads the extension; Godot's importer does not yet). |
+| GeoJSON | Features with `id` and `properties.kind`: `building` (footprint polygon; `index, district, zone, floors, height, elevation, shape, era, landmark`), `road` (line; `roadKind, width, era, bridge`), `tree` (point), and with `infra` the stations, substations, power plants, tanks, lift stations and treatment plants as points and every pipe, main, feeder, line and tunnel as a line with its depth and sizing. A `cymatic` member records the inputs, origin and bearing. | WGS84 `[lon, lat]`, 7 decimals (about a centimetre). The plan is laid on the plane tangent to the ellipsoid at the origin, plan −z pointing `bearing` degrees clockwise from north, and each point goes through Earth-centred coordinates to latitude and longitude (2 mm from the geodesic at 6 km). Spheres, origins beyond ±89° and cities crossing the antimeridian are refused. |
+| CityJSON 2.0 | One `Building` per building (`b<number>`): a `Solid` with `GroundSurface`, `WallSurface` and `RoofSurface`, `lod` "1" for prisms and "2" for tapered shapes; attributes `measuredHeight, storeysAboveGround, zone, district, shape, era, landmark` (+ `built`). One `Road` per kind and era: a `MultiSurface` of `TrafficArea`s. | Local metres: X east (plan x), Y north (plan −z), Z up; integer vertices at 1 mm with the minimum corner as `translate`. No CRS (GeoJSON is the georeferenced format), no networks or trees (CityJSON has no types for them). |
+
 ## Plugging into a master engine
 
 The engine was built to be one stage in a larger pipeline:
@@ -327,7 +357,7 @@ The engine was built to be one stage in a larger pipeline:
 
 ## Verification
 
-- `npm test` runs 117 tests in about seven minutes: Bessel values and zeros against scipy, spherical-harmonic orthonormality, mode norms by numerical integration, the square-plate corner convention, drive-point coupling, analytic nodal sets for boulevards, brute-force road-clearance and overlap checks on sampled cities, structural limits across every plate × preset, gravity scaling, OBJ winding and index validity, zip validity (checked with Python's `zipfile`), determinism, input validation; and for the underground, sewer slope/depth/flow conservation, force mains, looped mains and trunk flows, substation ratings and feeder accumulation, junctions at every crossing, brute-force tunnel-clearance over every building, connector lengths, and timing; and for the simulation, profile means and shapes, Hazen-Williams and voltage-drop hand-worked cases, strict head and voltage loss along every loaded main and feeder, Manning partial flow at the design peak, metro conservation and AM/PM reversal link by link, growth determinism and nesting, structural caps through densification, keyframe stats recomputed, impact sets, and agreement between the N-1 tiles and the failure model; and for terrain, flat-mode byte identity, ground and freeboard rules for every building and street, bridges that really cross water, one height per plan point, the reported grade against a recompute, arcology faces to open ground by brute force, sewer inverts against the heightfield, plant and tank siting, static heads within limits with valves exercised on 40 m of relief, elevation heads in the flow model, and keyframes that keep it all; and for people, trip conservation, vehicle-kilometres against car trips times their paths, flow only on shortest-path trees, BPR and capacity by hand, response to congestion and averaging that is really an average, land value monotone in its inputs and rank-correlated with access, zoning as value bands, the earned ridership carried by the flow model, determinism, and empty cities; and for chords, byte identity of a chord of one, duplicate voices refused, the composite field against the single-voice previews point by point on every plate, each voice's boulevards on its own nodal set and rings on its contours, streets only in their voice's territory, no short disconnected fragments, a faint voice converging to the single-voice city and the street share rising with weight, brute-force clearance and oriented-rectangle overlap on chord cities (sphere included), lot eras by dominant voice, era-ordered growth with early later-voice streets credited to the old city and each one on a route recomputed independently (mutation-tested), terrain and the commute on chords, determinism and the underground; and for queries, every operator, group, aggregate and ordering against direct computation, thresholds between a value and its rounding, missing values, accessibility read at each building's own street node, failure queries against `impact()` with every out-of-range asset refused, the English templates with plant and station read by the service named, station gains and tunnels recomputed with the first pick checked against every street node, search candidates regenerated and re-checked, the caller's frequency and Q ranges held, every city built counted against the budget (failed builds included), determinism, and agent-tool schemas walked against the engine's tables (mutation-tested).
+- `npm test` runs 150 tests in about seven minutes: Bessel values and zeros against scipy, spherical-harmonic orthonormality, mode norms by numerical integration, the square-plate corner convention, drive-point coupling, analytic nodal sets for boulevards, brute-force road-clearance and overlap checks on sampled cities, structural limits across every plate × preset, gravity scaling, OBJ winding and index validity, zip validity (checked with Python's `zipfile`), determinism, input validation; and for the underground, sewer slope/depth/flow conservation, force mains, looped mains and trunk flows, substation ratings and feeder accumulation, junctions at every crossing, brute-force tunnel-clearance over every building, connector lengths, and timing; and for the simulation, profile means and shapes, Hazen-Williams and voltage-drop hand-worked cases, strict head and voltage loss along every loaded main and feeder, Manning partial flow at the design peak, metro conservation and AM/PM reversal link by link, growth determinism and nesting, structural caps through densification, keyframe stats recomputed, impact sets, and agreement between the N-1 tiles and the failure model; and for terrain, flat-mode byte identity, ground and freeboard rules for every building and street, bridges that really cross water, one height per plan point, the reported grade against a recompute, arcology faces to open ground by brute force, sewer inverts against the heightfield, plant and tank siting, static heads within limits with valves exercised on 40 m of relief, elevation heads in the flow model, and keyframes that keep it all; and for people, trip conservation, vehicle-kilometres against car trips times their paths, flow only on shortest-path trees, BPR and capacity by hand, response to congestion and averaging that is really an average, land value monotone in its inputs and rank-correlated with access, zoning as value bands, the earned ridership carried by the flow model, determinism, and empty cities; and for chords, byte identity of a chord of one, duplicate voices refused, the composite field against the single-voice previews point by point on every plate, each voice's boulevards on its own nodal set and rings on its contours, streets only in their voice's territory, no short disconnected fragments, a faint voice converging to the single-voice city and the street share rising with weight, brute-force clearance and oriented-rectangle overlap on chord cities (sphere included), lot eras by dominant voice, era-ordered growth with early later-voice streets credited to the old city and each one on a route recomputed independently (mutation-tested), terrain and the commute on chords, determinism and the underground; and for queries, every operator, group, aggregate and ordering against direct computation, thresholds between a value and its rounding, missing values, accessibility read at each building's own street node, failure queries against `impact()` with every out-of-range asset refused, the English templates with plant and station read by the service named, station gains and tunnels recomputed with the first pick checked against every street node, search candidates regenerated and re-checked, the caller's frequency and Q ranges held, every city built counted against the budget (failed builds included), determinism, and agent-tool schemas walked against the engine's tables (mutation-tested).
 - The page is rendered headless (Playwright + Chromium) at desktop and phone widths through every view mode, with picking, fly controls and the section cut exercised.
 - Seven independent review passes (city layer, underground, simulation, terrain, people, chords, queries) each found real defects that were then fixed and re-verified: the square-plate coordinate convention, modal normalisation, inverted OBJ winding, tunnels missing foundations on long edges, streets crossing without junctions, undersized trunk mains, backup power lines sharing trenches with the lines they backed up, a slope cap reading the circle's scale wrong, valves starving the runs that climbed below them, 4 m steps at bridge abutments, and three tests that could not fail (now they can: mutation-tested); in the people model, destination sampling noise masquerading as equilibrium, a metro hand-off on the wrong base (+82 % ridership on the megastructure), and a sphere road-matching bug; in chords, a street budget that ignored the weights (a near-silent voice still laid a full network, +51 % street), duplicate voices doubling streets, and a ground preview that ignored all but the first voice; in queries, accessibility read as zero unless the street node was also asked for, a search that wandered outside the frequency range it was given, failed builds that spent no budget and vanished silently, "plant" and "station" read without the service the question named (a power question answered about the water plant), and out-of-range assets answered with a confident zero.
 
@@ -348,8 +378,9 @@ src/infrastructure.js     street graph and every underground network
 src/simulation.js         time axis, hourly flows, failure analysis
 src/people.js             population, commuting, traffic assignment, land value
 src/query.js              queries, plain-English questions, station siting, the inverse search, agent tools
+src/export.js             glTF 2.0, GeoJSON and CityJSON 2.0
 src/viewer.html           the 3D page (three.js from a CDN, everything else inline)
-bin/cymatic.mjs           headless CLI (summary, checks, metrics, query, ask, export, tools)
+bin/cymatic.mjs           headless CLI (summary, checks, metrics, query, ask, generate, tools)
 bin/cymatic-mcp.mjs       MCP server over agentTools()
 build.mjs                 inlines the modules into dist/
 test/                     one suite per module, plus the CLI/MCP suite and a failures-only reporter

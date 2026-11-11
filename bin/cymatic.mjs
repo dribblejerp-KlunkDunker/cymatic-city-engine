@@ -11,18 +11,25 @@
 //   cymatic metrics  -f 432 population metroShare meanCommuteMin
 //   cymatic query    -f 432 --q '{"from":"districts","orderBy":[{"field":"residents","dir":"desc"}],"limit":3}'
 //   cymatic ask      -f 432 "which districts lose water if tower 1 fails"
-//   cymatic export   -f 432 --out city.json [--infra]   (or city.obj)
+//   cymatic generate -f 432 --out city.glb [--infra] [--year 80 --horizon 100]
+//                    (.glb .gltf .geojson .city.json .obj .json; GeoJSON needs --origin lat,lon)
 //   cymatic tools                                    the agent tools and their sizes
 //
 // A profile is a JSON string, a path to a .json file, or shorthand flags (-f/--frequency, --chord 432,540,
 // --plate, --preset, --seed, --Q, --terrain, --gravity, --material, --fantasy). Flags override the JSON.
 // --json prints machine-readable output instead of text. Exit code 1 on error, 2 when a check fails and --strict.
 import { readFileSync, writeFileSync, realpathSync } from 'node:fs';
+import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { generateCity, toJSON, toOBJ, ENGINE_VERSION } from '../src/cymatic-engine.js';
+import { generateCity, fieldPreview, toJSON, toOBJ, ENGINE_VERSION } from '../src/cymatic-engine.js';
+import { cityAt } from '../src/simulation.js';
+import { toGLB, toGLTF, toGeoJSON, toCityJSON } from '../src/export.js';
 import { cityOf, query, ask, metricsOf, agentTools, METRICS } from '../src/query.js';
 
-const COMMANDS = ['summary', 'checks', 'metrics', 'query', 'ask', 'export', 'tools', 'help'];
+const COMMANDS = ['summary', 'checks', 'metrics', 'query', 'ask', 'generate', 'export', 'tools', 'help'];
+// file formats by extension, longest first (so city.city.json is CityJSON, not plain JSON)
+const FORMATS = [['.city.json', 'cityjson'], ['.geojson', 'geojson'], ['.gltf', 'gltf'], ['.glb', 'glb'], ['.obj', 'obj'], ['.json', 'json']];
+export const formatOf = (file) => FORMATS.find(([ext]) => file.toLowerCase().endsWith(ext))?.[1] ?? null;
 
 export function parseArgs(argv) {
   const out = { command: 'summary', profile: {}, positional: [], flags: {} };
@@ -44,6 +51,14 @@ export function parseArgs(argv) {
       case '--material': shorthand.material = val(); break;
       case '--terrain': shorthand.terrain = val(); break;
       case '--fantasy': shorthand.enforce = false; break;
+      case '--year': out.flags.year = num(val(), 'year'); break;
+      case '--horizon': out.flags.horizon = num(val(), 'horizon'); break;
+      case '--format': out.flags.format = val().toLowerCase(); break;
+      case '--instanced': out.flags.instanced = true; break;
+      case '--paint': out.flags.paint = val(); break;
+      case '--no-trees': out.flags.noTrees = true; break;
+      case '--origin': { const parts = val().split(','); if (parts.length !== 2) throw new Error('--origin needs "latitude,longitude", for example --origin 45.07,7.69'); out.flags.origin = parts.map((v) => num(v, 'origin')); break; }
+      case '--bearing': out.flags.bearing = num(val(), 'bearing'); break;
       case '--q': out.flags.q = val(); break;
       case '--out': case '-o': out.flags.out = val(); break;
       case '--infra': out.flags.infra = true; break;
@@ -125,8 +140,14 @@ commands
   metrics   named metrics: ${Object.keys(METRICS).join(', ')}
   query     structured query: --q '<json>'   (see src/query.js FIELDS)
   ask       plain-English question (template parser)
-  export    --out file.json | file.obj   [--infra]
+  generate  --out file.glb | .gltf | .geojson | .city.json | .obj | .json   (export is the same command)
+            --infra adds the networks; --format names the format when the extension does not
+            glTF: --paint zone|era, --instanced (EXT_mesh_gpu_instancing), --no-trees
+            GeoJSON: --origin lat,lon (required), --bearing degrees clockwise from north
   tools     agent tool names, descriptions and schema sizes
+
+time        --year Y [--horizon H] works with every city command: the city as it stood Y years into a growth
+            that completes the plan at H years (--horizon, else the profile's horizon, else 100)
 
 profile     JSON string or file.json, or -f/--frequency, --chord 432,540[:w], --plate circle|square|sphere,
             --preset town|city|megastructure|alien, --seed, --Q, --gravity, --material, --terrain flat|relief|valleys, --fantasy
@@ -150,7 +171,13 @@ export function run(argv, io = { log: (s) => process.stdout.write(s + '\n') }) {
     }
   }
   if (a.positional.length && a.command !== 'ask') throw new Error(`Unexpected argument "${a.positional[0]}" (cymatic help)`);
-  const city = cityOf(generateCity(a.profile));
+  let city = cityOf(generateCity(a.profile)), when = null;
+  if (a.flags.year !== undefined) {
+    const horizon = a.flags.horizon ?? a.profile.horizon ?? 100;
+    if (typeof horizon !== 'number') throw new Error(`The profile's horizon must be a number of years (got ${JSON.stringify(horizon)})`);
+    const frame = cityAt(city.layout, { year: a.flags.year, horizon });
+    city = cityOf(frame.layout); when = { year: frame.year, horizon }; // a frame is a complete city with its networks
+  } else if (a.flags.horizon !== undefined) throw new Error('--horizon sets the growth a --year is measured in; give --year too');
   const withInfra = !!(a.flags.infra || a.flags.people);
   // --strict judges every check the command looked at: the plan's, and the networks' when they were asked for
   const failing = () => [...city.layout.checks, ...(withInfra ? city.infra.checks ?? [] : [])].some((c) => c.status === 'fail');
@@ -181,16 +208,40 @@ export function run(argv, io = { log: (s) => process.stdout.write(s + '\n') }) {
       print(out, `${r.answer}\n(understood as ${JSON.stringify(r.understood)})`);
       break;
     }
-    case 'export': {
+    case 'generate': case 'export': {
       const file = a.flags.out;
-      if (!file) throw new Error('export needs --out file.json or file.obj');
+      if (!file) throw new Error(`${a.command} needs --out <file> (.glb .gltf .geojson .city.json .obj .json)`);
       // the extension names the format; anything else is refused rather than written as JSON under another name
-      const format = /\.obj$/i.test(file) ? 'obj' : /\.json$/i.test(file) ? 'json' : null;
-      if (!format) throw new Error(`export writes .json and .obj; "${file}" is neither (glTF, GeoJSON and CityJSON arrive with Phase 6)`);
+      const format = a.flags.format ?? formatOf(file);
+      if (!FORMATS.some(([, f]) => f === format)) throw new Error(a.flags.format ? `--format must be one of ${FORMATS.map(([, f]) => f).join(', ')} (got "${a.flags.format}")` : `"${file}" has no format this command writes (${FORMATS.map(([ext]) => ext).join(' ')}); name one with --format`);
+      const layout = city.layout;
       if (a.flags.infra) void city.infra; // attaches layout.infra and its OBJ writer
-      const body = format === 'obj' ? toOBJ(city.layout) : toJSON(city.layout);
-      writeFileSync(file, body);
-      print({ wrote: file, bytes: body.length }, `wrote ${file} (${fmt(body.length)} bytes)`);
+      const common = { infra: !!a.flags.infra, horizon: when?.horizon };
+      const written = [];
+      const write = (name, body) => { writeFileSync(name, body); written.push({ file: name, bytes: typeof body === 'string' ? Buffer.byteLength(body) : body.length }); };
+      if (format === 'json') write(file, toJSON(layout));
+      else if (format === 'obj') write(file, toOBJ(layout));
+      else if (format === 'geojson') {
+        if (!a.flags.origin) throw new Error('GeoJSON places the city on the Earth: give --origin latitude,longitude (and --bearing if plan-north is not north)');
+        write(file, toGeoJSON(layout, { ...common, origin: a.flags.origin, bearing: a.flags.bearing ?? 0 }));
+      } else if (format === 'cityjson') write(file, toCityJSON(layout, common));
+      else {
+        // the ground under a terrain city comes from the same field the city was built on
+        let elevation;
+        if (layout.meta.plate !== 'sphere' && (layout.meta.terrain?.mode ?? 'flat') !== 'flat') { const F = fieldPreview(a.profile); elevation = (x, z) => F.terrain.z(...F.toNorm([x, 0, z])); }
+        const opts = { ...common, paint: a.flags.paint ?? 'zone', instanced: !!a.flags.instanced, trees: !a.flags.noTrees, elevation };
+        if (format === 'glb') write(file, toGLB(layout, opts));
+        else {
+          const binFile = file.replace(/\.[^./\\]*$/, '') + '.bin';
+          const { json, bin } = toGLTF(layout, { ...opts, binName: basename(binFile) });
+          write(file, json); if (bin.length) write(binFile, bin);
+        }
+      }
+      const out = { wrote: written[0].file, bytes: written[0].bytes, format, buildings: layout.buildings.length };
+      if (written[1]) out.also = written[1];
+      if (when) Object.assign(out, when);
+      if (a.flags.instanced && (format === 'glb' || format === 'gltf')) out.note = 'instanced: per-building extras are not written';
+      print(out, `wrote ${out.wrote} (${fmt(out.bytes)} bytes${written[1] ? ` + ${written[1].file}, ${fmt(written[1].bytes)} bytes` : ''}) · ${format} · ${fmt(out.buildings)} buildings${when ? ` · year ${when.year} of ${when.horizon}` : ''}${out.note ? ` · ${out.note}` : ''}`);
       break;
     }
   }

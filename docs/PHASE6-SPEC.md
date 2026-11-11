@@ -1,8 +1,8 @@
 # Phase 6 — Export and headless CLI: spec
 
-Status: **final for implementation** (settled 2026-11-11 against engine 1.5.0). Every open decision of the
-draft is decided below with its reason. An implementer follows this top to bottom; a reviewer checks the
-proof tables.
+Status: **implemented in 1.6.0** (spec settled 2026-11-11 against engine 1.5.0; stages 6a–6d and the 6e wiring
+built the same day). Every decision is below with its reason; a reviewer checks the proof tables. What was built
+differently, and what is still to prove, is listed under "As built" at the end.
 
 ROADMAP goal: glTF with instancing (Blender, Unreal, Godot), GeoJSON with a chosen origin for GIS, CityJSON,
 and `cymatic generate profile.json --year 80 --out city.gltf`. Proof: files validate in their reference
@@ -179,6 +179,33 @@ Reference vectors (pyproj 3.8 topocentric pipeline, WGS84), required to 1e-8 deg
 
 **Done when** every proof row above is a passing test or a recorded review result, `npm run test:quiet`
 reports 0 failed and 0 skipped with the validator installed, and the review's findings are fixed or answered.
+
+## As built (1.6.0)
+
+Differences from the text above, each small and deliberate:
+
+- **Water** is the plate's outline at the water level (a disc on a circular plate), not a quad: a quad would
+  show water beyond the rim. It is drawn translucent (`alphaMode: BLEND`).
+- **Road materials** are one per kind (`road:<kind>`) in the page's street colours, not one for all roads.
+- **Trees** are instanced too under `--instanced`. A tree's size is the page's: 0.22 × the preset's lot × `s`.
+- **`--year`** works with every city command (`summary`, `checks`, `query`, `ask`), not only `generate`.
+- **Identity in the files.** The glTF root node's `extras`, the GeoJSON `cymatic` member and the CityJSON title
+  record the inputs, and the year and horizon when given. A `--year` export to `.json` is the keyframe as
+  `simulate()` gives it (proof 6a), so it records `meta.year` but not the horizon: **open**, see below.
+- **`cityAt` refuses a horizon under 5 years** where `simulate()` silently raises it to 5.
+- **GeoJSON** also writes power plants and water tanks; the metric proof is 0.5 % per footprint and 0.1 % over
+  the town, because seven decimals of a degree is about a centimetre on a ten-metre house.
+- **Viewer.** There is no export menu: Save's zip gains `city.glb` (with ground and networks) and
+  `city.city.json`, and `city.geojson` when a map origin is typed into the new field under the button.
+
+Still to do at the independent review (6e):
+
+- `cjval` on a town and a city, and a Godot headless import of `city.glb`. Done in the build session instead:
+  the official CityJSON 2.0.2 schema (0 errors, town and city) and a Blender 5.3 import (town, instanced town
+  and city; counts in CHANGELOG). Building or running downloaded programs was not permitted there.
+- Decide whether keyframe layouts should carry `meta.horizon` (a contract change that re-records the golden
+  hashes), so a `.json` year export names its own horizon.
+- Unreal's handling of `LINES` primitives and of the instancing extension remains unconfirmed.
 
 ## Out of scope for Phase 6
 
