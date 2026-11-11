@@ -1,0 +1,48 @@
+<!--
+  Evaluation set for the cymatic MCP server (bin/cymatic-mcp.mjs), engine 1.5.0.
+  Answers were computed directly with query() on the same profiles; the engine is deterministic, so they stay
+  valid until the engine version changes. Each question needs generate_city plus at least one more call.
+  Defaults unless stated: plate circle, preset city, seed 1, Q 100.
+-->
+<evaluation>
+  <qa_pair>
+    <question>Generate the city for 432 Hz. Which district (give its id number) has the most residents?</question>
+    <answer>1</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>In the 432 Hz city, if the first substation (substation 1 as the page numbers it) fails, how many residents lose power, rounded to the nearest whole person?</question>
+    <answer>15623</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>In the same failure (432 Hz city, substation 1 out), how many districts lose service?</question>
+    <answer>3</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>How many sewage lift stations does the 432 Hz city need?</question>
+    <answer>26</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>In the 432 Hz city at the peak hour, what kind of street has the highest volume-to-capacity ratio?</question>
+    <answer>spoke</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Generate 432 Hz on a square plate. How many metro stations does that city have?</question>
+    <answer>8</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Generate the chord 432 Hz + 540 Hz on a square plate. How many buildings belong to the second voice (the new quarter, era 1)?</question>
+    <answer>3779</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Generate 432 Hz with the town preset. What is the height in metres of its tallest building?</question>
+    <answer>21</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>Of 300 Hz, 432 Hz and 540 Hz on the default circular city, which frequency gives the largest population? Answer with the frequency in Hz.</question>
+    <answer>300</answer>
+  </qa_pair>
+  <qa_pair>
+    <question>In the 432 Hz city, how many buildings are in the mixed zone?</question>
+    <answer>914</answer>
+  </qa_pair>
+</evaluation>

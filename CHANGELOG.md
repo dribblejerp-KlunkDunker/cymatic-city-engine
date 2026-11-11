@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- Headless CLI `bin/cymatic.mjs`: `summary` (default), `checks`, `metrics`, `query`, `ask`, `export`, `tools`; profile from JSON, a file (saved `{input, …}` profiles too) or flags; text or `--json`; `--strict` exits 2 when a check fails. Summaries list only the checks that did not pass; `export` is byte-identical to `toJSON`/`toOBJ`.
+- MCP server `bin/cymatic-mcp.mjs` (stdio, no dependencies) exposing `agentTools()`; registered in `.mcp.json`.
+- Test tiers: `test:fast`, `test:<module>`, `test:quiet` with a failures-only reporter (`test/quiet-reporter.mjs`). New `test/cli.test.mjs`.
+- `CLAUDE.md` (agent guide) and `docs/PHASE6-SPEC.md`. Measured for the spec: a city's state at year Y depends on the simulation horizon (growth completes the plan by the horizon), so `--year` needs a horizon.
+- README: quick start and project layout brought up to date.
+- Review of the tooling (eighth review; different model, same session as the implementation), with mutation testing. Found and fixed:
+  - **The programs did not start when linked.** Both `bin` entries decided whether to run by the file name in `argv`, so `cymatic-mcp` as npm links it, any other link name, and Windows paths exited silently with code 0. Now `isMain()` compares real paths as file URLs.
+  - **The MCP server died on a bare JSON value** (`5`, `"x"`, `null`): now refused with −32600; a stray reply is dropped; an error inside a request returns −32603 and the server lives on.
+  - **`export --out city.glb` wrote JSON under that name.** Unknown extensions are refused.
+  - **A query with no limit cost ~34 KB** (200 building rows) through the MCP server: it now returns the first 25 rows with a note unless `limit` is set. `search_plans` says in its description that a commute-constrained search at the default budget blocks for about two minutes (measured 125 s on the city preset).
+  - `--strict` and `checks` ignored the networks' checks under `--infra`; both include them now.
+  - The quiet reporter said only "test failed" when a test file could not load; it now shows the reason from stderr.
+  - Mutation testing: 12 of 19 mutants killed by the first tests; `test/cli.test.mjs` grew to 8 tests (programs run as subprocesses and through links, `--strict` exit codes, infra numbers against the engine, row caps, junk input, the reporter itself) and now kills all 33.
+- `docs/PHASE6-SPEC.md` is final: 15 decisions with their measurements, four stages (time, glTF, GeoJSON, CityJSON) and a proof table each. Open for a later phase: running `search_plans` off the request thread with progress.
+
 ## 1.5.0 — 2026-10-17
 
 - Query layer (`src/query.js`): `cityOf` bundles a layout with lazily built networks and commute; `query()` over buildings, streets, districts, tanks, substations, stations, lift stations, treatment plants and pipes with `where` (`= != > >= < <= in`), `fail: {kind, index}` (answers from `impact()`), `groupBy`, aggregates (`count`, `sum`, `mean`, `min`, `max`), `orderBy`, `limit`, `fields`.
