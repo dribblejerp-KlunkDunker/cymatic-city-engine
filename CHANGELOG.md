@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Headless CLI `bin/cymatic.mjs`: `summary` (default), `checks`, `metrics`, `query`, `ask`, `export`, `tools`; profile from JSON, a file (saved `{input, …}` profiles too) or flags; text or `--json`; `--strict` exits 2 when a check fails. Summaries list only the checks that did not pass; `export` is byte-identical to `toJSON`/`toOBJ`.
+- MCP server `bin/cymatic-mcp.mjs` (stdio, no dependencies) exposing `agentTools()`; registered in `.mcp.json`.
+- Test tiers: `test:fast`, `test:<module>`, `test:quiet` with a failures-only reporter (`test/quiet-reporter.mjs`). New `test/cli.test.mjs` (3 tests).
+- `CLAUDE.md` (agent guide) and `docs/PHASE6-SPEC.md` (draft). Measured for the spec: a city's state at year Y depends on the simulation horizon (growth completes the plan by the horizon), so `--year` needs a horizon.
+- README: quick start and project layout brought up to date.
+
 ## 1.5.0 — 2026-10-17
 
 - Query layer (`src/query.js`): `cityOf` bundles a layout with lazily built networks and commute; `query()` over buildings, streets, districts, tanks, substations, stations, lift stations, treatment plants and pipes with `where` (`= != > >= < <= in`), `fail: {kind, index}` (answers from `impact()`), `groupBy`, aggregates (`count`, `sum`, `mean`, `min`, `max`), `orderBy`, `limit`, `fields`.

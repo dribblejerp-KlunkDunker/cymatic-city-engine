@@ -78,8 +78,19 @@ Captured headless from the page in this repository (`docs/screenshots/`).
 ## Quick start
 
 ```bash
-npm test          # 56 tests: physics against reference values, brute-force geometry, structural and utility invariants
-npm run build     # writes dist/cymatic-city.html (artifact page) and dist/cymatic-city-standalone.html (opens anywhere)
+npm test            # the whole suite (physics against reference values, brute-force geometry, networks, people, queries)
+npm run test:fast   # physics, export and CLI in a few seconds; test:<module> runs one suite; test:quiet prints only failures
+npm run build       # writes dist/cymatic-city.html (artifact page) and dist/cymatic-city-standalone.html (opens anywhere)
+```
+
+From the command line (summaries, never geometry; `--json` for machine output):
+
+```bash
+node bin/cymatic.mjs -f 432                                   # headline stats and the checks that did not pass
+node bin/cymatic.mjs summary --chord 432,540 --plate square --infra --people
+node bin/cymatic.mjs ask -f 432 "which districts lose water if tower 1 fails"
+node bin/cymatic.mjs export -f 432 --out city.obj --infra
+node bin/cymatic-mcp.mjs                                      # MCP server: the agent tools over stdio (.mcp.json registers it)
 ```
 
 Open `dist/cymatic-city-standalone.html` in a browser. (Saving files from the page only works when it is hosted inside Claude; everything else works anywhere.)
@@ -336,12 +347,16 @@ src/cymatic-engine.js     physics, plan, buildings, structure, export
 src/infrastructure.js     street graph and every underground network
 src/simulation.js         time axis, hourly flows, failure analysis
 src/people.js             population, commuting, traffic assignment, land value
+src/query.js              queries, plain-English questions, station siting, the inverse search, agent tools
 src/viewer.html           the 3D page (three.js from a CDN, everything else inline)
+bin/cymatic.mjs           headless CLI (summary, checks, metrics, query, ask, export, tools)
+bin/cymatic-mcp.mjs       MCP server over agentTools()
 build.mjs                 inlines the modules into dist/
-test/                     physics, city, export, infrastructure, simulation, terrain, people and chord suites
+test/                     one suite per module, plus the CLI/MCP suite and a failures-only reporter
 docs/screenshots/         the gallery above, captured headless
-research_notes/           cymatics physics, city realism, cymatic-architecture claims, utility standards
-reports/                  the research report behind the design
+docs/research-notes/      cymatics physics, city realism, cymatic-architecture claims, utility standards, people, chords, queries
+docs/PHASE6-SPEC.md       draft spec for export and the CLI's generate command
+CLAUDE.md                 guide for coding agents working on the repo
 ```
 
 ## Sources

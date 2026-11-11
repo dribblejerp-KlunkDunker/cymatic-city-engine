@@ -5,7 +5,21 @@
   "private": true,
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "build": "node build.mjs"
+    "test:quiet": "node --test --test-reporter=./test/quiet-reporter.mjs test/*.test.mjs",
+    "test:fast": "node --test --test-reporter=./test/quiet-reporter.mjs test/physics.test.mjs test/export.test.mjs test/cli.test.mjs",
+    "test:physics": "node --test --test-reporter=./test/quiet-reporter.mjs test/physics.test.mjs",
+    "test:export": "node --test --test-reporter=./test/quiet-reporter.mjs test/export.test.mjs",
+    "test:cli": "node --test --test-reporter=./test/quiet-reporter.mjs test/cli.test.mjs",
+    "test:query": "node --test --test-reporter=./test/quiet-reporter.mjs test/query.test.mjs",
+    "test:simulation": "node --test --test-reporter=./test/quiet-reporter.mjs test/simulation.test.mjs",
+    "test:people": "node --test --test-reporter=./test/quiet-reporter.mjs test/people.test.mjs",
+    "test:chord": "node --test --test-reporter=./test/quiet-reporter.mjs test/chord.test.mjs",
+    "test:infrastructure": "node --test --test-reporter=./test/quiet-reporter.mjs test/infrastructure.test.mjs",
+    "test:terrain": "node --test --test-reporter=./test/quiet-reporter.mjs test/terrain.test.mjs",
+    "test:city": "node --test --test-reporter=./test/quiet-reporter.mjs test/city.test.mjs",
+    "build": "node build.mjs",
+    "city": "node bin/cymatic.mjs",
+    "mcp": "node bin/cymatic-mcp.mjs"
   },
   "description": "Turns a drive frequency into a full 3D town, city, megastructure or alien city from its cymatic (Chladni) pattern, with realistic structure and underground utilities.",
   "main": "src/cymatic-engine.js",
@@ -18,11 +32,16 @@
   },
   "files": [
     "src",
+    "bin",
     "dist",
     "README.md"
   ],
   "license": "MIT",
   "engines": {
     "node": ">=18"
+  },
+  "bin": {
+    "cymatic": "bin/cymatic.mjs",
+    "cymatic-mcp": "bin/cymatic-mcp.mjs"
   }
 }
