@@ -71,7 +71,7 @@ Each phase lists what ships, what proves it, and the seam it opens for other eng
 
 ## Phase 6 — Export and headless CLI ✅ (1.6.0)
 
-Shipped: `src/export.js` (glTF 2.0 with shared meshes and optional `EXT_mesh_gpu_instancing`, GeoJSON with an exact tangent-plane projection, CityJSON 2.0), `cityAt()` for any year of a growth, and `cymatic generate <profile> --year 80 --out city.glb`. Decisions and proofs: `docs/PHASE6-SPEC.md`. Still open from the proof list: `cjval` and the Blender and Godot import checks, which need tools the build sessions did not have.
+Shipped: `src/export.js` (glTF 2.0 with shared meshes and optional `EXT_mesh_gpu_instancing`, GeoJSON with an exact tangent-plane projection, CityJSON 2.0), `cityAt()` for any year of a growth, and `cymatic generate <profile> --year 80 --out city.glb`. Decisions and proofs: `docs/PHASE6-SPEC.md`. Checked beyond the tests: the official CityJSON 2.0.2 schema and a Blender 5.3 import. Still open from the proof list: `cjval`, a Godot import, and the independent review.
 
 The original brief: glTF with instancing (Blender, Unreal, Godot), GeoJSON with a chosen origin for GIS, CityJSON, and `cymatic generate profile.json --year 80 --out city.gltf` so other engines call it without the page.
 

@@ -200,7 +200,9 @@ Differences from the text above, each small and deliberate:
 
 Still to do at the independent review (6e):
 
-- `cjval` on a town and a city; Blender and Godot headless imports of `city.glb`, object counts recorded.
+- `cjval` on a town and a city, and a Godot headless import of `city.glb`. Done in the build session instead:
+  the official CityJSON 2.0.2 schema (0 errors, town and city) and a Blender 5.3 import (town, instanced town
+  and city; counts in CHANGELOG). Building or running downloaded programs was not permitted there.
 - Decide whether keyframe layouts should carry `meta.horizon` (a contract change that re-records the golden
   hashes), so a `.json` year export names its own horizon.
 - Unreal's handling of `LINES` primitives and of the instancing extension remains unconfirmed.

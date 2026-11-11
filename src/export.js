@@ -400,6 +400,7 @@ export function toGeoJSON(layout, opts = {}) {
     points('substation', 'substation', I.power.substations, (o) => ({ ratingMVA: o.ratingMVA, loadMVA: o.loadMVA, kV: o.kV }));
     points('powerplant', 'powerPlant', I.power.plants, (o) => ({ capacityMW: o.capacityMW }));
     points('tank', 'waterTank', I.water.towers, (o) => ({ height: o.height, storageM3: o.storageM3, served: o.served, pumped: !!o.pumped }));
+    points('waterplant', 'waterPlant', I.water.plant?.pos ? [I.water.plant] : [], (o) => ({ capacityM3Day: o.capacityM3Day }));
     points('lift', 'liftStation', I.sewer.liftStations, (o) => ({ flow: o.flow, fromDepth: o.fromDepth }));
     points('treatment', 'treatmentPlant', I.sewer.plants, (o) => ({ flowM3Day: o.flowM3Day, served: o.served, depth: o.depth }));
     lines('sewer', 'sewerPipe', I.sewer.pipes, (o) => [o.up, o.down], (o) => ({ depth: o.upDepth, downDepth: o.downDepth, diameter: o.diameter, slope: o.slope, flow: o.flow, forceMain: !!o.forceMain }));

@@ -1,6 +1,26 @@
 # Changelog
 
-## Unreleased
+## 1.6.0 — 2026-11-11
+
+Phase 6: exchange formats and time. Spec, decisions and what was built differently: `docs/PHASE6-SPEC.md`.
+
+- **Time.** `simulate()` is now `schedule()` (when everything is built; all the random draws) plus `frameAt()` (the complete city at one year). Its output is unchanged: hashes of every keyframe, the events and the history, recorded on 1.5.0 before the split for a plain, a chord and a valleys town, still hold. New `cityAt(layout, { year, horizon = 100 })` gives the city at any year, equal to the keyframe there. A year means something only with its horizon (town 432 Hz at year 80: 1,063 buildings under horizon 80, 494 under horizon 100), so `horizon` is a profile key, written by the page only when it is not 100; the page's horizon field now defaults to 100, as `simulate()` always did.
+- **`src/export.js`** (pure, no dependencies, deterministic):
+  - `toGLB` / `toGLTF`: glTF 2.0. One node per building over a shared unit mesh per shape and colour (seven shapes serve a city), or `EXT_mesh_gpu_instancing` with `instanced`; explicit flat normals; streets as one mesh per kind; trees; the ground from an elevation sampler, clipped to the plate; water; the networks as `LINES` at true depth under the OBJ names; `paint` by zone or era.
+  - `toGeoJSON`: RFC 7946, placed on the Earth by an exact tangent-plane projection at a required origin (matches the four pyproj reference points to under 1e-9°); footprints, streets, trees and, with `infra`, every network asset and line. Spheres, polar origins and antimeridian crossings are refused with the reason.
+  - `toCityJSON`: CityJSON 2.0 in local metres; buildings as closed, outward-facing `Solid`s with ground, wall and roof surfaces; streets as `TrafficArea`s.
+- **CLI.** `generate` (alias `export`) writes `.glb .gltf .geojson .city.json .obj .json` by extension, longest first, or by `--format`; `--year Y [--horizon H]` works with every city command (horizon: flag, then the profile, then 100); `--paint`, `--instanced`, `--no-trees`, `--origin`, `--bearing`. Reported sizes are bytes on disk (they were characters).
+- **Page.** Save's zip gains `city.glb` (with ground and networks), `city.city.json` on flat plates, and `city.geojson` when a map origin is typed under the button. Checked in a headless browser: three saves, the GLB inside each zip valid, a bad origin refused with nothing saved.
+- `gltf-validator` 2.0.0-dev.3.10 is a pinned devDependency; runtime dependencies stay at zero. `package.json` exposes `./export`.
+- Tests: `test/time.test.mjs` (7) and `test/formats.test.mjs` (18); 150 tests in all. Mutation testing of the new rules: 64 of 64 mutants killed (mirrored frames, swapped scales, flipped normals and windings, GLB header fields, unclipped ground, wrong depths, lost instances, flipped north and bearing, wrong ellipsoid, open or clockwise rings, loosened refusals, mirrored CityJSON, swapped ground and roof, unshared vertices, horizon and year bounds, flag precedence).
+- Checked outside the test suite:
+  - Khronos validator: 0 errors, 0 warnings on eleven files in the tests and on the full city (6,481 buildings, 5.9 MB).
+  - CityJSON 2.0.2 official schema (`cityjson.min.schema.json`, Python `jsonschema`): 0 errors for the town (1,066 objects) and the city (6,485 objects).
+  - Blender 5.3 (`bpy`) imports the town (1,095 mesh objects over 13 shared meshes), the instanced town (1,180 mesh objects: Blender expands the extension) and the city (7,802 objects); `b0` arrives with its size (w, d, h) and its properties.
+  - **Not done:** `cjval` and a Godot import. Building or running downloaded programs was not permitted in the build session. Unreal is unconfirmed.
+- This phase was implemented and mutation-tested in one session; the independent review in a fresh session (6e) is still owed.
+
+Earlier in this release (agent tooling):
 
 - Headless CLI `bin/cymatic.mjs`: `summary` (default), `checks`, `metrics`, `query`, `ask`, `export`, `tools`; profile from JSON, a file (saved `{input, …}` profiles too) or flags; text or `--json`; `--strict` exits 2 when a check fails. Summaries list only the checks that did not pass; `export` is byte-identical to `toJSON`/`toOBJ`.
 - MCP server `bin/cymatic-mcp.mjs` (stdio, no dependencies) exposing `agentTools()`; registered in `.mcp.json`.

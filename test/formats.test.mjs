@@ -243,6 +243,12 @@ test('glTF ground: follows the sampler inside the plate, buildings stand on it, 
   const sq = city({ ...TOWN, plate: 'square' }), S = parseGLB(toGLB(sq)), Q = triples(read(S.doc, S.bin, S.doc.meshes[child(S.doc, 'ground').mesh].primitives[0].attributes.POSITION));
   assert.equal(Q.length, 4);
   assert.ok(Q.every((p) => Math.abs(Math.abs(p[0]) - sq.meta.world.extent) < 1e-3 && Math.abs(Math.abs(p[2]) - sq.meta.world.extent) < 1e-3));
+  // a square plate with relief: the whole grid, nothing clipped, out to the edges
+  const sqr = { ...TOWN, plate: 'square', terrain: 'relief' }, SR = parseGLB(toGLB(city(sqr), { elevation: sampler(sqr), groundGrid: 32 })), els = sampler(sqr);
+  const G = triples(read(SR.doc, SR.bin, SR.doc.meshes[child(SR.doc, 'ground').mesh].primitives[0].attributes.POSITION)), half = city(sqr).meta.world.extent;
+  assert.equal(G.length, 33 * 33);
+  assert.ok(G.every((p) => Math.abs(p[0]) <= half * (1 + 1e-6) && Math.abs(p[2]) <= half * (1 + 1e-6) && Math.abs(p[1] - els(p[0], p[2])) < 1e-3));
+  assert.ok(Math.abs(Math.max(...G.map((p) => p[0])) - half) < 1e-3 && Math.abs(Math.min(...G.map((p) => p[2])) + half) < 1e-3);
   // the sphere has no ground mesh in this phase
   assert.equal(child(parseGLB(toGLB(city({ ...TOWN, plate: 'sphere' }))).doc, 'ground'), null);
 });
@@ -414,7 +420,7 @@ test('GeoJSON structure: a FeatureCollection of closed counter-clockwise rings i
   const I = L.infra;
   assert.deepEqual(count, {
     building: L.buildings.length, road: L.roads.length, tree: L.trees.length,
-    ...Object.fromEntries(Object.entries({ metroStation: I.transit.stations.length, substation: I.power.substations.length, powerPlant: I.power.plants.length, waterTank: I.water.towers.length, liftStation: I.sewer.liftStations.length, treatmentPlant: I.sewer.plants.length,
+    ...Object.fromEntries(Object.entries({ metroStation: I.transit.stations.length, substation: I.power.substations.length, powerPlant: I.power.plants.length, waterTank: I.water.towers.length, waterPlant: 1, liftStation: I.sewer.liftStations.length, treatmentPlant: I.sewer.plants.length,
       sewerPipe: I.sewer.pipes.length, waterMain: I.water.mains.length, powerFeeder: I.power.feeders.length, powerTransmission: I.power.transmission.length, metroTunnel: I.transit.tunnels.length, utilityTunnel: I.utilidors.length }).filter(([, v]) => v > 0)),
   });
   // properties, on the first building, the first road and the first sewer pipe
