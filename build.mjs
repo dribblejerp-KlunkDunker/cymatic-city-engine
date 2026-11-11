@@ -11,7 +11,7 @@ const combined = engine.replace(/^export /gm, '') + '\n' +
   infra.replace(/^import .*$/gm, '').replace(/^export /gm, '') +
   `\nreturn { ${INFRA_EXPORTS.join(', ')} };\n})();\n`;
 const sim = readFileSync(new URL('./src/simulation.js', import.meta.url), 'utf8');
-const SIM_EXPORTS = ['simulate', 'flows', 'impact', 'resilience', 'cityStats', 'PROFILES', 'PEAK_HOUR', 'GROWTH', 'LIFETIMES', 'hazenWilliams', 'voltageDrop', 'partialFlowDepth', 'cableFor'];
+const SIM_EXPORTS = ['simulate', 'schedule', 'frameAt', 'cityAt', 'flows', 'impact', 'resilience', 'cityStats', 'PROFILES', 'PEAK_HOUR', 'GROWTH', 'LIFETIMES', 'hazenWilliams', 'voltageDrop', 'partialFlowDepth', 'cableFor'];
 const combinedAll = combined + '\n' +
   `const { ${SIM_EXPORTS.join(', ')} } = (() => {\n` +
   sim.replace(/^import .*$/gm, '').replace(/^export /gm, '') +
@@ -31,9 +31,17 @@ const combinedAll3 = combinedAll2 + '\n' +
   `const { ${QUERY_BINDINGS.join(', ')} } = (() => {\nconst failImpact = impact, runPeople = people;\n` +
   qry.replace(/^import .*$/gm, '').replace(/^export \{.*\};?$/gm, '').replace(/^export /gm, '') +
   `\nreturn { ${QUERY_EXPORTS.join(', ')} };\n})();\n`;
+// exchange formats (glTF, GeoJSON, CityJSON): the page's Save writes them
+const exp = readFileSync(new URL('./src/export.js', import.meta.url), 'utf8');
+const EXPORT_EXPORTS = ['toGLB', 'toGLTF', 'toGeoJSON', 'toCityJSON', 'geoProjector', 'unitBuildingMesh', 'EXPORT_COLORS'];
+if (/<\/script/i.test(exp)) throw new Error('sources must not contain a closing script tag');
+const combinedAll4 = combinedAll3 + '\n' +
+  `const { ${EXPORT_EXPORTS.join(', ')} } = (() => {\n` +
+  exp.replace(/^import .*$/gm, '').replace(/^export /gm, '') +
+  `\nreturn { ${EXPORT_EXPORTS.join(', ')} };\n})();\n`;
 const out = viewer
-  .replace('@@ENGINE_TEXT@@', () => combinedAll3)
-  .replace('/*@@ENGINE@@*/', () => combinedAll3);
+  .replace('@@ENGINE_TEXT@@', () => combinedAll4)
+  .replace('/*@@ENGINE@@*/', () => combinedAll4);
 mkdirSync(new URL('./dist/', import.meta.url), { recursive: true });
 // artifact page (the host adds doctype, charset and viewport) and a standalone copy that opens anywhere
 writeFileSync(new URL('./dist/cymatic-city.html', import.meta.url), out);
