@@ -79,7 +79,7 @@ Captured headless from the page in this repository (`docs/screenshots/`).
 
 ```bash
 npm test            # the whole suite (physics against reference values, brute-force geometry, networks, people, queries)
-npm run test:fast   # physics, export and CLI in a few seconds; test:<module> runs one suite; test:quiet prints only failures
+npm run test:fast   # physics, export and CLI in about ten seconds; test:<module> runs one suite; test:quiet prints only failures
 npm run build       # writes dist/cymatic-city.html (artifact page) and dist/cymatic-city-standalone.html (opens anywhere)
 ```
 
@@ -355,7 +355,7 @@ build.mjs                 inlines the modules into dist/
 test/                     one suite per module, plus the CLI/MCP suite and a failures-only reporter
 docs/screenshots/         the gallery above, captured headless
 docs/research-notes/      cymatics physics, city realism, cymatic-architecture claims, utility standards, people, chords, queries
-docs/PHASE6-SPEC.md       draft spec for export and the CLI's generate command
+docs/PHASE6-SPEC.md       the spec for Phase 6: export formats and the CLI's generate command
 CLAUDE.md                 guide for coding agents working on the repo
 ```
 

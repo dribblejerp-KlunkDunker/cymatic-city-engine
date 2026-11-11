@@ -20,7 +20,8 @@ node bin/cymatic.mjs help                                    # every command and
 Geometry goes to a file (`export --out city.json|city.obj`) and into the conversation as one line: path and
 size. Cost guide for one default city: ~2 s to generate, +1.5 s with `--infra`, +5 s with `--people`; ask for
 the extra stages only when the question needs them. The MCP server in `.mcp.json` (`cymatic`) offers the same
-through `generate_city`, `query_city`, `ask_city`, `suggest_metro_station`, `search_plans`.
+through `generate_city`, `query_city`, `ask_city`, `suggest_metro_station`, `search_plans`. Its `query_city`
+returns 25 rows unless `limit` is set: aggregate or name `fields` before raising it.
 
 ## Finding code
 
@@ -48,7 +49,7 @@ in CHANGELOG.md; what is next in ROADMAP.md and `docs/PHASE6-SPEC.md`.
 ## Tests
 
 Iterate on the one suite that covers the change: `npm run test:<module>`. Measured, one file at a time:
-physics, export, cli ~1 s each (`test:fast` runs all three); simulation 22 s, query 23 s, people 32 s,
+physics and export ~1 s each, cli ~7 s (`test:fast` runs all three); simulation 22 s, query 23 s, people 32 s,
 terrain 51 s, chord 64 s, infrastructure 69 s, city 102 s. Before committing, `npm run test:quiet` once
 (failures and one totals line). Report counts and failures, not logs.
 

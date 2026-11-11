@@ -17,7 +17,8 @@
 // A profile is a JSON string, a path to a .json file, or shorthand flags (-f/--frequency, --chord 432,540,
 // --plate, --preset, --seed, --Q, --terrain, --gravity, --material, --fantasy). Flags override the JSON.
 // --json prints machine-readable output instead of text. Exit code 1 on error, 2 when a check fails and --strict.
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, realpathSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import { generateCity, toJSON, toOBJ, ENGINE_VERSION } from '../src/cymatic-engine.js';
 import { cityOf, query, ask, metricsOf, agentTools, METRICS } from '../src/query.js';
 
@@ -120,7 +121,7 @@ const HELP = `cymatic <command> [profile] [options]   (Cymatic City Engine ${ENG
 
 commands
   summary   headline stats and checks that did not pass (default)   --infra --people --all
-  checks    every check with its value and basis
+  checks    every check with its value and basis   --infra adds the networks' checks
   metrics   named metrics: ${Object.keys(METRICS).join(', ')}
   query     structured query: --q '<json>'   (see src/query.js FIELDS)
   ask       plain-English question (template parser)
@@ -129,7 +130,7 @@ commands
 
 profile     JSON string or file.json, or -f/--frequency, --chord 432,540[:w], --plate circle|square|sphere,
             --preset town|city|megastructure|alien, --seed, --Q, --gravity, --material, --terrain flat|relief|valleys, --fantasy
-output      text by default; --json for machine-readable; --strict exits 2 when any check fails`;
+output      text by default; --json for machine-readable; --strict exits 2 when any check fails (with --infra, the networks' too)`;
 
 export function run(argv, io = { log: (s) => process.stdout.write(s + '\n') }) {
   const a = parseArgs(argv), json = !!a.flags.json;
@@ -150,7 +151,9 @@ export function run(argv, io = { log: (s) => process.stdout.write(s + '\n') }) {
   }
   if (a.positional.length && a.command !== 'ask') throw new Error(`Unexpected argument "${a.positional[0]}" (cymatic help)`);
   const city = cityOf(generateCity(a.profile));
-  const failing = city.layout.checks.some((c) => c.status === 'fail');
+  const withInfra = !!(a.flags.infra || a.flags.people);
+  // --strict judges every check the command looked at: the plan's, and the networks' when they were asked for
+  const failing = () => [...city.layout.checks, ...(withInfra ? city.infra.checks ?? [] : [])].some((c) => c.status === 'fail');
   switch (a.command) {
     case 'summary': {
       const S = summarize(city, a.flags);
@@ -158,7 +161,7 @@ export function run(argv, io = { log: (s) => process.stdout.write(s + '\n') }) {
       break;
     }
     case 'checks': {
-      const rows = city.layout.checks.map(({ id, label, value, status, basis }) => ({ id, status, value, label, basis }));
+      const rows = [...city.layout.checks, ...(withInfra ? city.infra.checks ?? [] : [])].map(({ id, label, value, status, basis }) => ({ id, status, value, label, basis }));
       print(rows, rows.map((c) => `${c.status.padEnd(4)} ${c.id} = ${c.value}  (${c.basis})`).join('\n'));
       break;
     }
@@ -181,17 +184,26 @@ export function run(argv, io = { log: (s) => process.stdout.write(s + '\n') }) {
     case 'export': {
       const file = a.flags.out;
       if (!file) throw new Error('export needs --out file.json or file.obj');
+      // the extension names the format; anything else is refused rather than written as JSON under another name
+      const format = /\.obj$/i.test(file) ? 'obj' : /\.json$/i.test(file) ? 'json' : null;
+      if (!format) throw new Error(`export writes .json and .obj; "${file}" is neither (glTF, GeoJSON and CityJSON arrive with Phase 6)`);
       if (a.flags.infra) void city.infra; // attaches layout.infra and its OBJ writer
-      const body = /\.obj$/i.test(file) ? toOBJ(city.layout) : toJSON(city.layout);
+      const body = format === 'obj' ? toOBJ(city.layout) : toJSON(city.layout);
       writeFileSync(file, body);
       print({ wrote: file, bytes: body.length }, `wrote ${file} (${fmt(body.length)} bytes)`);
       break;
     }
   }
-  return a.flags.strict && failing ? 2 : 0;
+  return a.flags.strict && failing() ? 2 : 0;
 }
 
-if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith('/cymatic.mjs') || process.argv[1]?.endsWith('/cymatic')) {
+// Run only when this file is the program (not when a test imports it). Comparing real paths as file URLs holds
+// through npm's bin links, any link name, and Windows paths.
+export function isMain(metaUrl, argv1 = process.argv[1]) {
+  try { return !!argv1 && metaUrl === pathToFileURL(realpathSync(argv1)).href; } catch { return false; }
+}
+
+if (isMain(import.meta.url)) {
   try { process.exitCode = run(process.argv.slice(2)); }
   catch (e) { process.stderr.write(`cymatic: ${e.message}\n`); process.exitCode = 1; }
 }
