@@ -198,7 +198,21 @@ Differences from the text above, each small and deliberate:
 - **Viewer.** There is no export menu: Save's zip gains `city.glb` (with ground and networks) and
   `city.city.json`, and `city.geojson` when a map origin is typed into the new field under the button.
 
-Still to do at the independent review (6e):
+After the independent review (2026-11-19; fixes 2026-11-22, listed in CHANGELOG 1.6.0):
+
+- **Deterministic math.** The proof "a profile round-tripped through the CLI reproduces the viewer's city
+  byte for byte" failed because V8 in Node and in Chromium differ in the last bit of the elementary
+  functions. `src/detmath.js` replaces them everywhere; `test/page.test.mjs` is that proof, automated.
+- **`meta.horizon`** is written on year frames (decision 1's open question, settled: yes), and the files'
+  identity reads it from there; `opts.horizon` is gone.
+- **The profile carries `year`** when a year of growth is saved, and the CLI reads it.
+- **Foundations and a finer ground.** A `foundations` group on terrain, and a default grid of about 10 m
+  cells (64 to 384 a side) instead of a fixed 128.
+- **Precision.** Translations and scales to 0.1 mm, quaternions to 1e-9 (decision 4 said 1 mm and 1e-6).
+- **Streams and refusals.** `-` for standard input and output; flags that do not apply to the chosen format
+  are refused; `--infra` governs networks in year exports too.
+
+The first build's own list, for the record:
 
 - `cjval` on a town and a city, and a Godot headless import of `city.glb`. Done in the build session instead:
   the official CityJSON 2.0.2 schema (0 errors, town and city) and a Blender 5.3 import (town, instanced town

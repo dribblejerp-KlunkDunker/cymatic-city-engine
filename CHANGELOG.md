@@ -1,8 +1,30 @@
 # Changelog
 
-## 1.6.0 — 2026-11-11
+## 1.6.0 — 2026-11-22
 
 Phase 6: exchange formats and time. Spec, decisions and what was built differently: `docs/PHASE6-SPEC.md`.
+
+### Independent review (2026-11-19) and its fixes (2026-11-22)
+
+A fresh session reviewed the phase and failed it on one blocking finding: **the page and the command line did not produce the same bytes.** Node's V8 and Chromium's V8 return different last bits for `Math.sin`, `exp`, `pow`, `atan2` and the rest (atan2 on 43 % of inputs), and one bit is enough to change a water-main layout or a feeder's size. Everything below answers that review; its full text is the Project note "Phase 6 independent review".
+
+- **B1, fixed: `src/detmath.js`.** sin, cos, atan, atan2, asin, acos, exp, log, log2, pow and hypot built only from operations whose bits the language guarantees (+ − × ÷, sqrt, exact scaling by powers of two), after the classic fdlibm algorithms. Each is within one ulp of the platform's. Every stage in `src/` calls `DM.*`; a test scans `src/` and fails on any platform call. `test/page.test.mjs` runs the same modules in Chromium and in Node and compares more than fifty outputs from the math up, then saves a city and a year of growth from the built page and requires `cymatic generate profile.json` to write the same `layout.json`, `city.obj`, `city.glb`, `city.city.json` and `city.geojson` byte for byte. "Same profile, same city" now holds across runtimes, not only inside one.
+  - Cost: none that can be measured. Generating the default city takes 0.82 s against 0.76 s; the commuting model is inside run-to-run noise (3.6–5.9 s both before and after).
+  - Effect on cities: last-bit changes only. The default city and town keep their building, street and population counts, and all ten answers in `docs/mcp-evaluation.xml` are unchanged. Bytes differ from 1.5.0, so the golden hashes were re-recorded once; they are now the same in every runtime.
+- **`meta.horizon`** (the open decision, taken): year frames carry the horizon beside the year, so a saved year names its own city. The exchange files read it from there.
+- **S1** A year saved from the page round-trips: the page writes `year` (and the horizon) into `profile.json` while a year of growth is shown, and the CLI builds a profile that carries `year` at that year. Flags still win.
+- **S2** The page's `layout.json` no longer has the extra `resilience` key.
+- **S3** glTF ground against the mesh, not only the layout: on terrain each building gets a foundation prism down to its foundation depth (group `foundations`), and the default ground grid follows the plate's size (about 10 m cells, at most 384 a side). Tests check both against the exported mesh.
+- **S4** GeoJSON leaves out a line whose two ends round to the same position (street-graph edges under a centimetre); the others keep their ids.
+- **S5** `cymatic metrics` honours `--year`.
+- **S6** `--origin`, `--bearing`, `--paint`, `--no-trees`, `--instanced` and the horizon in the files' identity are each tested through to the written file.
+- **S7** A profile of `-` is read from standard input; `--out -` with `--format` writes the file to standard output (binary-safe; the one-line report goes to standard error). `.gltf` is refused there because it is two files.
+- **Nits.** Quaternions are written to 1e-9 and translations to 0.1 mm (buildings on the largest sphere were 1.17 mm off; the proof is now 0.2 mm). `--infra` decides whether a year export carries the networks, as it does for the plan. A flag that would change nothing in the chosen format is refused with the format it belongs to. The page's horizon field accepts what the CLI accepts (5 to 1000, fractions allowed). `cityAt` reports a failed frame with the real error.
+- Tests: 162 in all (`test/detmath.test.mjs` 4, `test/page.test.mjs` 3, five more in the time and format suites). The page tests need Playwright with a Chromium and skip, saying so, without one.
+- Validated by the reviewer on the pre-fix build (formats unchanged since): glTF 58 files with 0 errors and 0 warnings; GeoJSON 77 files (3.2 million features) read by GDAL with matching counts, projection within 7.9 mm of pyproj; CityJSON `cjval 0.10.0` "File is valid" on eleven cities, all 36,281 solids closed.
+- Still open: a Godot import and Unreal; the review's N7 (an importer without the instancing extension shows one unit mesh per node) is documented in the README. These fixes have their own mutation pass (below) but not a second independent review.
+
+### As first built (2026-11-11)
 
 - **Time.** `simulate()` is now `schedule()` (when everything is built; all the random draws) plus `frameAt()` (the complete city at one year). Its output is unchanged: hashes of every keyframe, the events and the history, recorded on 1.5.0 before the split for a plain, a chord and a valleys town, still hold. New `cityAt(layout, { year, horizon = 100 })` gives the city at any year, equal to the keyframe there. A year means something only with its horizon (town 432 Hz at year 80: 1,063 buildings under horizon 80, 494 under horizon 100), so `horizon` is a profile key, written by the page only when it is not 100; the page's horizon field now defaults to 100, as `simulate()` always did.
 - **`src/export.js`** (pure, no dependencies, deterministic):

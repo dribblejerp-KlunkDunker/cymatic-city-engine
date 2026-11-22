@@ -32,15 +32,19 @@ in CHANGELOG.md; what is next in ROADMAP.md and `docs/PHASE6-SPEC.md`.
 
 ## Invariants — a broken invariant is a bug even when tests pass
 
-- **Determinism.** Same profile → byte-identical `toJSON`. All randomness comes from `mulberry32(seed …)`;
-  order never depends on time.
+- **Determinism, across runtimes.** Same profile → byte-identical output in Node and in the browser. All
+  randomness comes from `mulberry32(seed …)`; order never depends on time; and `src/` never calls
+  `Math.sin cos tan atan atan2 asin acos exp log log2 log10 pow hypot` or `**`: use `DM.*` from
+  `src/detmath.js` (`Math.sqrt abs floor round min max` are exact and fine). `test/detmath.test.mjs` scans
+  for this; `test/page.test.mjs` compares Chromium with Node.
 - **Pure, plain data.** Every `src/` stage is JSON in, JSON out, with no DOM, globals or I/O (it runs in a
   Worker). `build.mjs` inlines `src/` into the viewer: a new export the viewer uses goes into its export
   lists, and `src/` stays free of closing script tags.
 - **A chord of one is the plain frequency**, byte for byte.
 - **A year needs its horizon.** Growth is paced to finish at the horizon, so `(profile, year)` names a city
   only with `horizon` (profile key, default 100). `simulate()` is `schedule()` + `frameAt()`; the golden
-  hashes in `test/time.test.mjs` pin its output, and a deliberate change to growth re-records them.
+  hashes in `test/time.test.mjs` pin its output, and a deliberate change to growth re-records them. Year
+  frames carry `meta.year` and `meta.horizon`; a profile with `year` is built at that year.
 - **Exports are deterministic and validated.** `src/export.js` writes the same bytes for the same layout;
   glTF must pass `gltf-validator` (a devDependency: `npm install`) with 0 errors and 0 warnings.
 - **Contract changes bump `ENGINE_VERSION`** (src/cymatic-engine.js) and get a CHANGELOG entry.
@@ -54,9 +58,11 @@ in CHANGELOG.md; what is next in ROADMAP.md and `docs/PHASE6-SPEC.md`.
 ## Tests
 
 Iterate on the one suite that covers the change: `npm run test:<module>`. Measured, one file at a time:
-physics and export ~1 s each, cli ~7 s (`test:fast` runs all three); time 12 s, formats 23 s, simulation 22 s, query 23 s, people 32 s,
-terrain 51 s, chord 64 s, infrastructure 69 s, city 102 s. Before committing, `npm run test:quiet` once
-(failures and one totals line). Report counts and failures, not logs.
+physics, detmath and export ~1 s each, cli ~7 s (`test:fast` runs all four); time 15 s, formats 30 s,
+simulation 22 s, query 23 s, people 32 s, terrain 51 s, chord 64 s, infrastructure 69 s, city 102 s, page
+240 s (builds the page and drives a Chromium; run it after any change to `src/` math, the viewer or the CLI's
+export). Before committing, `npm run test:quiet` once (about ten minutes; failures and one totals line).
+Report counts and failures, not logs.
 
 A new rule gets a test that goes **red** without it: break the rule, watch the test fail, restore.
 
