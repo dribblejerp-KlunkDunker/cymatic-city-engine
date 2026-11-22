@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { generateCity, toJSON, heightLimit, slendernessLimit } from '../src/cymatic-engine.js';
 import { buildInfrastructure, sewerMinSlope } from '../src/infrastructure.js';
 import { impact, flows, cityAt } from '../src/simulation.js';
+import { run } from '../bin/cymatic.mjs';
 
 const CITY = { frequency: 432 }, MEGA = { frequency: 432, preset: 'megastructure' };
 const cache = new Map();
@@ -233,4 +234,15 @@ test('growth answers to the ward: a year of "all", gravity 0.5 is that year of t
   const dep = new Set(tall.layout.wards[0].dependent.buildings);
   tall.layout.buildings.forEach((x, i) => assert.equal(dep.has(i), x.ward === 0 && breaks(x), `year-100 building ${i}`));
   assert.ok(dep.size > 0);
+});
+
+test('the command line takes magic from a profile and says what depends on it', () => {
+  const prof = { ...CITY, magic: { wards: [{ where: { district: largestDistrict(city(CITY)) }, height: 4, gravity: 0.5 }] } };
+  const lines = []; assert.equal(run([JSON.stringify(prof), '--json'], { log: (x) => lines.push(x) }), 0);
+  const S = JSON.parse(lines.join('\n'));
+  assert.deepEqual(S.wards, { count: 1, buildings: 2202, residents: city(prof).stats.wards.residents, dependent: 211, dependentResidents: city(prof).stats.wards.dependentResidents });
+  const text = []; run([JSON.stringify(prof)], { log: (x) => text.push(x) });
+  assert.match(text.join('\n'), /^wards 1 · buildings 2,202 · residents [\d,]+ · dependent 211 \([\d,]+ residents\)$/m);
+  const plainText = []; run([JSON.stringify(CITY)], { log: (x) => plainText.push(x) });
+  assert.doesNotMatch(plainText.join('\n'), /wards/);
 });
