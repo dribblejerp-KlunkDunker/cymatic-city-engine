@@ -1,7 +1,8 @@
 # Phase 7 — Fantasy as mechanics: spec
 
 Status: **final for implementation, pending five calls that are sleeves' to make** (listed at the end; each has
-a recommendation the stages assume). Written 2026-11-22 against engine 1.6.0. Every number below was measured
+a recommendation the stages assume). Written 2026-11-22 against engine 1.6.0. The calls are pictured on the
+real 432 Hz city in the artifact "Phase 7 Calls". Every number below was measured
 on 1.6.0 with the scripts in `docs/phase7-measurements/` (run any of them with `node`).
 
 ROADMAP brief: ley lines as a real network with capacity and nodes; per-district physics overrides as wards;
@@ -40,6 +41,8 @@ gives the 1.6.0 bytes.
 | How much energy is there? | Mean S² over the plate is 0.045 to 0.066. Peak electrical demand is 5 W/m² (alien), 6 (town), 20 to 28 (cities), 196 (megastructure). |
 | What does a flux of 600 W/m² at unit S² buy? | Ley supply over peak demand: town 5.1×, alien 6.3×, 540 Hz square 2.3×, cities 1.34× to 1.45×, megastructure 0.16×. |
 | How many lines, and how loaded? | Gabriel graph of the nexuses: 13 to 105 lines (49 for the default city). Moving surplus to deficit along it loads the busiest line to 0.35 to 0.75 of its weaker end's output in the town, alien, square and 300 Hz cities, 1.97 in the default city, 2.62 at 648 Hz and 6.31 in the chord city. |
+| How big do catacombs get? | Galleries under every street within reach of a seed, default city (565 km of streets, 13 km of metro): around the 36 nexuses, 20 km at 100 m, **44 km at 150 m**, 78 km at 200 m, 230 km at 400 m; around the 14 landmarks, 5, **11**, 21 and 85 km. |
+| What would a height multiplier do? | Sketch on the default city's largest district (2,202 buildings) at four times the requested height: 278 buildings ask for more than the world's slenderness rule allows; under a half-gravity ward 211 stand taller than the world would permit (tallest 272 m against 236 m). At twice the height almost nothing binds (5 buildings). |
 | Is there room for catacombs? | Sewers bottom out at 7.5 to 10.1 m; arcology utility tunnels occupy 6 to 9 m; the metro's crown is at 16.9 m in the default city (18.4 at 648 Hz, 36 to 60 m where foundations push it down). The tightest band is 6.8 m. |
 | What does the octave below look like? | Its nodal network is about half as long as this octave's: about 38 km under the default city (this octave about 80 km; streets 566 km), about 9 km under the town, by a grid-crossing estimate. It exists whenever f/2 is above the plate's fundamental (40 Hz). Metro stations are 182 to 485 m from the nearest deep road, landmarks 59 to 469 m. |
 
@@ -61,7 +64,7 @@ gives the 1.6.0 bytes.
 | 12 | How does power reach the city? | Each substation taps its nearest nexus. Demand and supply are balanced over the lines by successive shortest paths that respect capacity (ties broken by index). What the ley cannot deliver is `undeliveredMW`; the perimeter station is built for that shortfall × 1.25 and not at all when it is zero. Street transmission runs from the taps as it runs from the station today. | "Magical power sources as plants with different siting rules": many small sources inside the plan. The megastructure (0.16×) honestly keeps its reactor. |
 | 13 | Is the ley a physical layer? | No. Lines have no trench and no clearance; nexuses are places (position, strength, output), not structures. | Nothing to collide with; the clearance proof is for the underworld. |
 | 14 | How are layers checked? | A registry, `infra.layers[]`: each layer lists its elements (street edge, free segment or footprint) with top and bottom depth. One check, `layer-clearance`, takes every pair of layers and every place they share plan position and requires the larger of their two clearances between them. It includes today's layers and replaces nothing: `tunnel-clearance` stays. | The proof says "every extra layer obeys the rules of the layers above it"; a pairwise rule over a registry is that sentence as code, and it audits the existing layers for free. |
-| 15 | Where do catacombs go? | Galleries 2 m wide and 2.4 m high under streets within 400 m (along streets) of a seed: each nexus when the ley is on, else each landmark, else each district's strongest building. Crown = the deepest utility on that edge + 1 m. Where a metro tunnel shares the edge the floor must clear its crown by 2 m, or the edge is left out and counted. | The tightest band is 6.8 m and the gallery with both clearances needs 5.4 m. Streets carry no foundations. |
+| 15 | Where do catacombs go? | Galleries 2 m wide and 2.4 m high under streets within 150 m (along streets) of a seed: each nexus when the ley is on, else each landmark, else each district's strongest building. Crown = the deepest utility on that edge + 1 m. Where a metro tunnel shares the edge the floor must clear its crown by 2 m, or the edge is left out and counted. | The tightest band is 6.8 m and the gallery with both clearances needs 5.4 m. Streets carry no foundations. A reach of 150 m gives 44 km around nexuses; the first draft's 400 m gave 230 km, two fifths of every street in the city. |
 | 16 | Catacomb access? | An entrance at each seed and wherever needed so that no point of a gallery is more than 250 m, along galleries, from one. Check `catacomb-egress`. | An access rule that can fail and be seen to. |
 | 17 | Where do the deeps go? | On the nodal lines of the octave below (f/2; a chord uses its first voice), simplified to segments of 20 m or more, level, 6 m below the lower of the metro's floor and the deepest foundation. No deeps, with the reason, when f/2 is under the fundamental. (Call D.) | Half the length of this octave's pattern (38 km under the default city): a second, coarser city. It crosses under streets and buildings alike, so it must be below everything. |
 | 18 | Deeps access? | Shafts, because stations and landmarks are 59 to 485 m away from the nearest deep road. One shaft per 800 m of deep road or less, each where a deep road passes under a street edge that carries no metro tunnel; the shaft head opens on the street. Checks `deep-access` (every point within 800 m, along the deeps, of a shaft; every connected piece has one) and `layer-clearance` for the shafts. | Measured: gates at stations would give none. A street edge keeps the shaft out of foundations. |
@@ -82,6 +85,9 @@ review are for the strongest.
   Buildings in a ward gain `ward: i`. Checks `self-weight` and `slenderness` judge each building by its own limit.
 - Networks: `gAt(node)` and `pressureAt(node)` by decision 6 replace the single `g` in the four places.
 - `dependent`, `ward-dependence`, `impact({ kind: 'ward' })`.
+- If call W is yes: `height` multiplies the height the pattern asks for, for each building in the ward, before any
+  limit is applied, in `generateCity` and wherever growth recomputes a building's height. A ward of `height`
+  alone is not neutral and is kept.
 - **Out:** `layout.meta.magic.wards` (resolved), `layout.wards[]`, `building.ward`.
 
 | Claim | Test |
@@ -91,6 +97,7 @@ review are for the strongest.
 | Local where it can be | On a non-arcology city, a ward on one district leaves every building outside it identical. |
 | The measured effects | Megastructure, `"all"`, gravity 0.5: tallest 780 m (600 without). City, gravity 0.5: 134 lift stations (26 without), 70 m tanks. |
 | Dependence is real | Every `dependent` building breaks an unwarded limit and no other building does; `impact` agrees; a ward that tightens limits has none. |
+| Height asks, the limits answer (call W) | A ward of `height: 4` alone raises requested heights and every building still passes the world's limits, with none `dependent`. The same ward with `gravity: 0.5` builds some of them taller, and exactly those are `dependent`. Outside the ward nothing changes. |
 | Refusals | A district in two wards, gravity outside 0.05 to 5, an `at` outside the plate, an unknown `where`: each named. |
 
 ### 7b — Ley
@@ -158,10 +165,10 @@ Each has a recommendation, and the stages above assume it. Changing one changes 
 | | Call | Recommended | The alternative |
 |---|---|---|---|
 | **K** | The profile key | `magic` | `arcana`, `fantasy` (the last collides with the theme and with "fantasy mode") |
-| **W** | May a ward also ask for more height? | Yes: `height`, a multiplier on the heights the pattern asks for in that district. Without it a ward changes the skyline only in megastructures (measured), and has nothing to hold up. | Physics only: wards then matter mostly for sewers, water and megastructures. (7a) |
+| **W** | May a ward also ask for more height? | Yes: `height`, a multiplier on the heights the pattern asks for in that district. Without it a ward changes the skyline only in megastructures (measured), and has nothing to hold up. It takes a bold multiplier to matter: about four, not two. | Physics only: wards then matter mostly for sewers, water and megastructures. (7a) |
 | **F** | The ley flux | 600 W/m² at unit S²: a town or an alien city lives on its ley five times over, the default city just does (1.39×), a megastructure cannot (0.16×). | 150: only towns and alien cities are self-sufficient. 5,000: everything is. (7b) |
 | **D** | Where the deeps run | On the pattern of the octave below. | Under the boulevards, like the metro. Cheaper, and says nothing. (7d) |
-| **C** | What catacombs gather around | Nexuses when the ley is on, else landmarks. | Always landmarks. (7c) |
+| **C** | What catacombs gather around | Nexuses when the ley is on, else landmarks: 36 small crypts, 44 km. | Always landmarks: 14 crypts, 11 km. (7c) |
 
 ## Out of scope for Phase 7
 
