@@ -25,6 +25,9 @@ const withInfra = (o = TOWN) => { const L = city(o); if (!L.infra) L.infra = bui
 const sampler = (o) => { const F = fieldPreview(o); return (x, z) => F.terrain.z(...F.toNorm([x, 0, z])); };
 const tmp = (name) => join(mkdtempSync(join(tmpdir(), 'fmt-')), name);
 const cli = (...args) => { const lines = []; const code = run(args, { log: (s) => lines.push(s) }); return { code, out: lines.join('\n') }; };
+// Byte arrays are compared with this, never with deepEqual: when two megabyte files differ, deepEqual builds a
+// diff of every byte and the process runs out of memory before it can say anything.
+const sameBytes = (a, b, what) => { const A = Buffer.from(a.buffer, a.byteOffset, a.byteLength), B = Buffer.from(b.buffer, b.byteOffset, b.byteLength); let at = 0; while (at < A.length && at < B.length && A[at] === B[at]) at++; assert.ok(A.equals(B), `${what}: ${A.length} and ${B.length} bytes, first difference at byte ${at}`); };
 const SHAPES = ['block', 'house', 'tower', 'terrace', 'pod', 'dome', 'spire'];
 
 // ---------------------------------------------------------------- glTF helpers (independent of the exporter)
@@ -356,7 +359,7 @@ test('glTF scene: a city root with named groups, materials in the page’s colou
 
 test('glTF, GeoJSON and CityJSON are deterministic: twice in one process and in two processes, byte for byte', () => {
   const relief = { ...TOWN, terrain: 'relief' };
-  assert.deepEqual(toGLB(city(relief), { elevation: sampler(relief) }), toGLB(generateCity(relief), { elevation: sampler(relief) }));
+  sameBytes(toGLB(city(relief), { elevation: sampler(relief) }), toGLB(generateCity(relief), { elevation: sampler(relief) }), 'the same city exported twice');
   assert.equal(toGeoJSON(city(), { origin: [45, 7] }), toGeoJSON(generateCity(TOWN), { origin: [45, 7] }));
   assert.equal(toCityJSON(city()), toCityJSON(generateCity(TOWN)));
   const one = mkdtempSync(join(tmpdir(), 'fmt-')), two = mkdtempSync(join(tmpdir(), 'fmt-'));
@@ -413,17 +416,17 @@ test('CLI flags reach the file: --origin and --bearing, --paint, --no-trees, --i
   // --paint era colours a chord by voice
   const chordArgs = ['--chord', '432,540', '--preset', 'town'], e = tmp('era.glb');
   cli('generate', ...chordArgs, '--out', e, '--paint', 'era');
-  assert.deepEqual(bytesOf(e), toGLB(city({ chord: [432, 540], preset: 'town' }), { paint: 'era' }));
+  sameBytes(bytesOf(e), toGLB(city({ chord: [432, 540], preset: 'town' }), { paint: 'era' }), '--paint era');
   assert.ok(parseGLB(bytesOf(e)).doc.materials.some((m) => m.name === 'era:1'));
   assert.equal(parseGLB(bytesOf(e)).doc.nodes[0].extras.paint, 'era');
   assert.throws(() => cli('generate', ...args, '--out', tmp('p.glb'), '--paint', 'rainbow'), /paint must be/);
   // --no-trees and --instanced
   const n = tmp('bare.glb'), i = tmp('inst.glb');
   cli('generate', ...args, '--out', n, '--no-trees');
-  assert.deepEqual(bytesOf(n), toGLB(city(), { trees: false }));
+  sameBytes(bytesOf(n), toGLB(city(), { trees: false }), '--no-trees');
   assert.equal(child(parseGLB(bytesOf(n)).doc, 'trees'), null);
   cli('generate', ...args, '--out', i, '--instanced');
-  assert.deepEqual(bytesOf(i), toGLB(city(), { instanced: true }));
+  sameBytes(bytesOf(i), toGLB(city(), { instanced: true }), '--instanced');
   // a year of growth: each format names the year and the horizon it is measured in
   const y = tmp('y.glb'), yg = tmp('y.geojson'), yc = tmp('y.city.json');
   for (const [f, extra] of [[y, []], [yg, ['--origin', '45,7']], [yc, []]]) cli('generate', ...args, '--year', '30', '--horizon', '60', '--out', f, ...extra);
@@ -433,7 +436,7 @@ test('CLI flags reach the file: --origin and --bearing, --paint, --no-trees, --i
   assert.deepEqual([yDoc.year, yDoc.horizon], [30, 60]);
   assert.match(JSON.parse(readFileSync(yc, 'utf8')).metadata.title, /year 30 of 60$/);
   const frame = cityAt(city(), { year: 30, horizon: 60 }).layout, { infra: _n, infraToOBJ: _o, ...bare } = frame;
-  assert.deepEqual(bytesOf(y), toGLB(bare)); // no --infra, no networks
+  sameBytes(bytesOf(y), toGLB(bare), 'a year without --infra'); // no networks
   assert.equal(child(parseGLB(bytesOf(y)).doc, 'underground'), null);
   assert.equal(readFileSync(yc, 'utf8'), toCityJSON(frame));
 });
