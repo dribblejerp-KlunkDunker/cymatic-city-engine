@@ -23,6 +23,7 @@
     "city": "node bin/cymatic.mjs",
     "mcp": "node bin/cymatic-mcp.mjs",
     "test:detmath": "node --test --test-reporter=./test/quiet-reporter.mjs test/detmath.test.mjs",
+    "test:wards": "node --test --test-reporter=./test/quiet-reporter.mjs test/wards.test.mjs",
     "test:page": "node --test --test-reporter=./test/quiet-reporter.mjs test/page.test.mjs"
   },
   "description": "Turns a drive frequency into a full 3D town, city, megastructure or alien city from its cymatic (Chladni) pattern, with realistic structure and underground utilities.",

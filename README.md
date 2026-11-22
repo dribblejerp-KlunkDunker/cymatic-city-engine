@@ -226,6 +226,14 @@ The engine is one set of equations with two switches:
 
 **Custom settlements** start from any preset and override radius, lot size, floor height, floor range, core floors, street spacing, slenderness, arcology design height and terrace step, the look, gravity, and the material — including a custom material given as compressive strength and density (`{ label: 'Living wood', sigma: 40e6, rho: 600 }`).
 
+**Wards** (`magic.wards`, Phase 7a) are fantasy as mechanics: per-district multipliers on the world's gravity, the material's strength, the water head rules and the heights the pattern asks for. A ward covers whole districts: `where` is `"all"`, `{ "district": n }` (as `query()` counts, from 0), `{ "at": [x, z] }` (the district under that point; `[x, y, z]` on a sphere) or `{ "polarity": 1 | -1 }` (every district of that sign). Inside it the structure answers to the ward's limits (`heightLimit(material, g·k_g)·k_σ`, `slendernessLimit(base, g·k_g)`, the terrace step), sewers to its gravity where each pipe starts, and tanks and pressures to its gravity and `pressure`; a street node takes the ward holding most of the floor area it serves. `layout.wards[i].dependent` lists the buildings that break the world's own limits and stand only while the ward holds; the `ward-dependence` check counts them and `impact(layout, infra, { kind: 'ward', index })` says what falls. A ward of 1 × 1 × 1 × 1 is nothing (the profile's bytes without it); a district in two wards, effective gravity outside 0.05–5 g, a point off the plate or an unknown `where` are refused by name.
+
+```json
+{ "frequency": 432,
+  "magic": { "wards": [ { "where": { "polarity": 1 }, "gravity": 0.5 },
+                        { "where": { "district": 1 }, "height": 4, "strength": 2 } ] } }
+```
+
 **Themes** rename and recolour without touching the engineering: *Realistic*, *High fantasy* (aqueducts, ley lines, deep roads, dwarven galleries…), *Alien hive* (nutrient veins, bioelectric lines, burrow ways…) and *Solarpunk*.
 
 ## Profiles
@@ -257,6 +265,7 @@ A city in time needs one more number. Growth is paced to finish the plan at the 
 | `besselJ`, `besselZeros`, `legendreNormalized`, `realSphericalHarmonic` | Special functions (cross-checked against scipy). |
 | `PRESETS`, `PLATES`, `MATERIALS`, `CUSTOM_FIELDS`, `customPreset`, `resolveMaterial`, `heightLimit`, `slendernessLimit`, `SAFETY_FACTOR`, `CORE_FLOORS`, `MIN_CORE_SIDE` | Rules and constants. |
 | `toJSON(layout)`, `toOBJ(layout)`, `buildingMesh(b)`, `zipStore(files)`, `crc32`, `checksFor(meta, stats)` | Export and re-checking. |
+| `wardReport(statics, buildings, meta, world, steps?, terraceDependent?)` | What each ward covers and holds up (`layout.wards[]` and `stats.wards`), for a layout whose buildings changed. |
 | `mulberry32(seed)`, `noteName(hz)` | Utilities. |
 
 `src/infrastructure.js`:
@@ -266,6 +275,7 @@ A city in time needs one more number. Growth is paced to finish the plan at the 
 | `buildInfrastructure(layout)` | Build every network for a layout; returns `{ graph, laterals, sewer, water, power, transit, utilidors, stats, checks }` and attaches the OBJ hook. On terrain, `graph.nodes[i].elev`, `sewer.pipes[].slope` (the invert fall), `water.towers[].elev/height/pumped`, `water.prvs[]`, `water.nodeHeadM[]`. |
 | `buildStreetGraph(layout)` | The street graph alone. |
 | `sewerMinSlope(D, g)`, `foundationDepth(b)`, `underground(layout, P, depth)`, `infraToOBJ` | Rules and helpers. |
+| `wardGravity(meta)` | `{ g, on, gAt(node), headGAt(node) }`: the gravity at a street node, and the gravity its water head rules see (a ward's gravity ÷ its `pressure`). |
 | `SEWER`, `WATER`, `POWER`, `TRANSIT`, `UTILIDOR` | Design constants with their sources in the comments. |
 
 `src/people.js`:
@@ -283,7 +293,7 @@ A city in time needs one more number. Growth is paced to finish the plan at the 
 | `flows(layout, infra, hour, { hazenC, modeShare, metroTrips })` | `{ hour, water{nodePressure[], minPressure, lowNodes, criticalNodes, totalFlow, mains[], staticKPa}, power{nodeVoltage[], minPu, underVoltage, feeders[], substations[], totalMVA, blend}, sewer{pipes[{fullness, surcharged}], surcharged, maxFullness}, transit{links[{loadAB, loadBA, capacity, loadFactor}], stations[], dailyTrips, hourTrips, maxLoadFactor}, flags[] }`. |
 | `cityAt(layout, { year, horizon = 100 })` | The complete city `{ year, layout, infra, stats }` as it stood at any year (to a tenth) of a growth that builds the plan out at `horizon`: equal to the keyframe `simulate(layout, { years: horizon })` gives at that year. Years outside (0, horizon] are refused. |
 | `schedule(layout, { years })`, `frameAt(layout, schedule, year)` | The two halves of `simulate()`: when everything is built (all the random draws), and the city at one year of that schedule. |
-| `impact(layout, infra, { kind, index })` | `{ affected[], degraded[], people, degradedPeople, jobs, share, summary, … }` for tower, waterplant, water, treatment, lift, sewer, plant, substation, power, transmission, transit, station. |
+| `impact(layout, infra, { kind, index })` | `{ affected[], degraded[], people, degradedPeople, jobs, share, summary, … }` for tower, waterplant, water, treatment, lift, sewer, plant, substation, power, transmission, transit, station, ward (what stands only while that ward holds). |
 | `resilience(layout, infra)` | `{ water, power, sewer, transit }` each `{ worstShare, worst{kind, index}, score }`. |
 | `PROFILES`, `PEAK_HOUR`, `GROWTH`, `LIFETIMES`, `POWER_FLOW`, `hazenWilliams`, `voltageDrop`, `partialFlowDepth`, `cableFor`, `cityStats` | Constants and formulas. |
 
@@ -318,15 +328,19 @@ A city in time needs one more number. Growth is paced to finish the plan at the 
 ```
 layout
 ├─ meta        frequency, note, plate, preset, base, arcology, presetLabel, presetSpec?, seed, Q, gravity, material, materialSpec,
-│              enforce, inverse, modes[], dominant, symmetry, sharpness, world{shape, extent, area, Rs}, ringLevels, …
+│              enforce, inverse, modes[], dominant, symmetry, sharpness, world{shape, extent, area, Rs}, ringLevels, …,
+│              magic?{ wards[{where, districts[], gravity, strength, pressure, height}] }   (only when a ward resolves)
 ├─ roads[]     { a:[x,y,z], b:[x,y,z], w, kind: boulevard|ring|spoke|wall }
-├─ buildings[] { pos, up, fwd, w, d, h, floors, zone, shape, polarity, amp, district, landmark }
+├─ buildings[] { pos, up, fwd, w, d, h, floors, zone, shape, polarity, amp, district, landmark, ward? }
+├─ wards[]?    { where, districts[], gravity, strength, pressure, height, effectiveGravity, heightLimit, slendernessLimit,
+│              terraceLimit, buildings, residents, dependent{buildings[], residents} }
 ├─ trees[]     { pos, up, s }
 ├─ stats       areaKm2, buildings, roadLengthKm, streetDensity, roadShare, greenShare, far, population, jobs, densityPerHa,
 │              maxHeight, heightLimit, slendernessLimit, maxSlenderness, maxStreetDistance, minRoadClearance, binding, …
+│              (heightLimit and slendernessLimit stay the world's; wards?{count, buildings, residents, dependent, …})
 ├─ checks[]    { id, label, value, status: pass|warn|fail|info, basis }
 └─ infra
-   ├─ graph     { nodes[{pos, deg}], edges[{a, b, len, kind, w}], connectors }
+   ├─ graph     { nodes[{pos, deg, ward?}], edges[{a, b, len, kind, w}], connectors }
    ├─ laterals[] { building, node, length, residents, jobs }
    ├─ sewer     { plants[], pipes[{up, down, edge, length, diameter, slope, upDepth, downDepth, flow, avgFlow, lift, forceMain, plant}],
    │             liftStations[], manholes[], nodeDepth[] }
