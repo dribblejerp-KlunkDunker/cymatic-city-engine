@@ -436,9 +436,104 @@ export function resolveParams(input = {}) {
     inverse: !!input.inverse,
     terrain: resolveTerrain(input.terrain),
     chord,
+    magic: resolveMagic(input.magic, clamp(num(input.gravity ?? preset.gravity, 'Gravity'), 0.05, 5)),
   };
 }
 export const MAX_VOICES = 3;
+
+const SHAPE_VOLUME = { block: 1, house: 1, tower: 1, terrace: 1, pod: 0.785, dome: 0.5, spire: 0.33 };
+const RES_SHARE = { residential: 0.9, mixed: 0.5, core: 0.25, green: 0 };
+
+// ---------------------------------------------------------------- magic: fantasy as mechanics (docs/PHASE7-SPEC.md)
+// A ward multiplies the world's gravity, the material's strength, the water head rules and the heights the
+// pattern asks for, over the districts its `where` names. Neutral wards resolve to nothing, and a `magic` that
+// resolves to nothing is null: the profile then runs exactly the code a profile without the key runs.
+const WARD_MULTIPLIERS = ['gravity', 'strength', 'pressure', 'height'];
+function resolveMagic(m, gravity) {
+  if (m == null || m === false) return null;
+  if (typeof m !== 'object' || Array.isArray(m)) throw new Error('magic must be an object: { wards: [ … ] }');
+  for (const k of Object.keys(m)) {
+    if (k === 'wards') continue;
+    if ((k === 'ley' || k === 'underworld') && (m[k] == null || m[k] === false)) continue;
+    throw new Error(k === 'ley' || k === 'underworld' ? `magic.${k} is not built in engine ${ENGINE_VERSION} (wards only so far)` : `Unknown magic key "${k}" (wards, ley, underworld)`);
+  }
+  const wards = [];
+  if (m.wards != null) {
+    if (!Array.isArray(m.wards)) throw new Error('magic.wards must be a list of wards');
+    m.wards.forEach((w, i) => {
+      const at = `magic.wards[${i}]`;
+      if (!w || typeof w !== 'object' || Array.isArray(w)) throw new Error(`${at} must be an object: { where, gravity, strength, pressure, height }`);
+      for (const k of Object.keys(w)) if (k !== 'where' && !WARD_MULTIPLIERS.includes(k)) throw new Error(`${at}: unknown key "${k}" (where, ${WARD_MULTIPLIERS.join(', ')})`);
+      const out = { where: resolveWhere(w.where, at) };
+      for (const k of WARD_MULTIPLIERS) {
+        const x = w[k] == null ? 1 : Number(w[k]);
+        if (!Number.isFinite(x) || x <= 0) throw new Error(`${at}.${k} must be a multiplier above 0`);
+        out[k] = x;
+      }
+      const g = gravity * out.gravity;
+      if (g < 0.05 || g > 5) throw new Error(`${at}: gravity ${out.gravity} × the world's ${gravity} g gives ${+g.toFixed(4)} g, outside the engine's 0.05 to 5 g`);
+      if (WARD_MULTIPLIERS.every((k) => out[k] === 1)) return; // neutral: nothing
+      wards.push(out);
+    });
+  }
+  return wards.length ? { wards } : null;
+}
+function resolveWhere(where, at) {
+  const bad = () => new Error(`${at}: unknown "where" ${JSON.stringify(where) ?? 'undefined'} (use "all", { "district": n }, { "at": [x, z] } or { "polarity": 1 | -1 })`);
+  if (where === 'all') return 'all';
+  if (!where || typeof where !== 'object' || Array.isArray(where)) throw bad();
+  const keys = Object.keys(where);
+  if (keys.length !== 1) throw bad();
+  if (keys[0] === 'district') {
+    if (!Number.isInteger(where.district) || where.district < 0) throw new Error(`${at}: district must be a whole number from 0`);
+    return { district: where.district };
+  }
+  if (keys[0] === 'polarity') {
+    if (where.polarity !== 1 && where.polarity !== -1) throw new Error(`${at}: polarity must be 1 or -1`);
+    return { polarity: where.polarity };
+  }
+  if (keys[0] === 'at') {
+    const a = where.at;
+    if (!Array.isArray(a) || (a.length !== 2 && a.length !== 3) || !a.every((x) => typeof x === 'number' && Number.isFinite(x))) throw new Error(`${at}: "at" must be a point, [x, z] in metres ([x, y, z] on a sphere)`);
+    return { at: [...a] };
+  }
+  throw bad();
+}
+// The districts each ward covers, and the ward of each district (−1: none). `all` is the ward that covers
+// everything, including the buildings and street nodes no district claims.
+function placeWards(wards, dom, districts, districtAt) {
+  const n = districts.sizes.length, ofDistrict = new Int32Array(n).fill(-1);
+  let all = -1;
+  const lists = wards.map((w, i) => {
+    const at = `magic.wards[${i}]`, where = w.where;
+    let list;
+    if (where === 'all') { all = i; list = districts.sizes.map((_, d) => d); }
+    else if ('district' in where) {
+      if (where.district >= n) throw new Error(`${at}: there is no district ${where.district}: this city has ${n} (0 to ${n - 1})`);
+      list = [where.district];
+    } else if ('polarity' in where) list = districts.signs.flatMap((s, d) => (s === where.polarity ? [d] : []));
+    else {
+      const a = where.at;
+      if (dom.kind === 'sphere' ? a.length !== 3 : a.length !== 2) throw new Error(`${at}: "at" must be ${dom.kind === 'sphere' ? '[x, y, z] on a sphere' : '[x, z] on a flat plate'}`);
+      const P = dom.kind === 'sphere' ? a : [a[0], 0, a[1]];
+      if (dom.kind === 'sphere' && !(len3(P) > 0)) throw new Error(`${at}: "at" [0, 0, 0] names no point of the sphere`);
+      const [u, v] = dom.toNorm(P);
+      if (!dom.inside(u, v)) throw new Error(`${at}: the point [${a.join(', ')}] is outside the plate`);
+      const d = districtAt(u, v);
+      if (d < 0) throw new Error(`${at}: the point [${a.join(', ')}] is in no district`);
+      list = [d];
+    }
+    return list;
+  });
+  if (all >= 0 && wards.length > 1) throw new Error(`magic.wards[${all}] covers everything ("all"), so no other ward can stand beside it`);
+  lists.forEach((list, i) => {
+    for (const d of list) {
+      if (ofDistrict[d] >= 0) throw new Error(`District ${d} is in two wards (magic.wards[${ofDistrict[d]}] and magic.wards[${i}]); a district takes one ward`);
+      ofDistrict[d] = i;
+    }
+  });
+  return { lists, of: (d) => (all >= 0 ? all : d >= 0 ? ofDistrict[d] : -1) };
+}
 // A voice lays streets where it moves the plate at least this close to the strongest voice there (w·A within 15 %):
 // its own territory plus a narrow band where the voices overlap, so their street networks cross and join.
 export const VOICE_BAND = 0.15;
@@ -954,7 +1049,11 @@ function footprintClearance(hash, b, step) {
 
 // Largest height difference between a terrace cell and any neighbour (open cells and the plate edge count as 0 m).
 function maxTerraceStep(dom, buildings, L, terrain = null) {
-  if (!buildings.length) return 0;
+  return terraceSteps(dom, buildings, L, terrain).reduce((m, x) => Math.max(m, x), 0);
+}
+// the exposed face of each terrace: its top above its lowest neighbour (or the open ground beside it)
+function terraceSteps(dom, buildings, L, terrain = null) {
+  if (!buildings.length) return [];
   // ground level of the lowest open cell beside a terrace (recorded when the terraces were cut)
   const openGround = (b) => (!terrain || terrain.mode === 'flat' ? 0 : b.openGround ?? b.elevation ?? 0);
   // neighbours are found in plan; on terrain the exposed face includes the ground step between the two lots
@@ -962,17 +1061,15 @@ function maxTerraceStep(dom, buildings, L, terrain = null) {
   const lots = buildings.map((b) => ({ P: planOf(b.pos) }));
   const nb = neighbourLists(dom, lots, L);
   const top = (b) => b.h + (b.elevation ?? 0);
-  let worst = 0;
-  buildings.forEach((b, i) => {
+  return buildings.map((b, i) => {
     let low = nb[i].missing ? openGround(b) : Infinity;
     const expected = dom.kind === 'plane' ? 4 : 0;
     if (dom.kind === 'plane' && nb[i].length < expected) low = openGround(b);
     for (const j of nb[i]) low = Math.min(low, top(buildings[j]));
     if (dom.kind === 'sphere' && nb[i].length < 4) low = openGround(b);
     if (low === Infinity) low = openGround(b);
-    worst = Math.max(worst, top(b) - low);
+    return top(b) - low;
   });
-  return worst;
 }
 
 // ---------------------------------------------------------------- terrain
@@ -1110,6 +1207,16 @@ export function generateCity(input = {}) {
   };
   const zoneOf = (amp) => (amp >= 0.72 ? 'core' : amp >= 0.42 ? 'mixed' : amp >= 0.12 ? 'residential' : 'green');
 
+  // wards (magic): each covers whole districts and brings its own gravity, strength and height; a ward's limits
+  // are the world's formulas at the ward's values. Without wards none of this runs.
+  const wardPlan = p.magic ? placeWards(p.magic.wards, dom, districts, districtAt) : null;
+  const wardLimits = wardPlan && p.magic.wards.map((w) => {
+    const g = p.gravity * w.gravity, hL = heightLimit(p.materialSpec, g) * w.strength, sL = pr.arcology ? Infinity : slendernessLimit(pr.slender, g);
+    return { g, hLimit: hL, sLimit: sL, hMat: p.enforce ? hL : Infinity, slender: p.enforce ? sL : Infinity, height: w.height };
+  });
+  const wardAt = wardPlan ? (u, v) => wardPlan.of(districtAt(u, v)) : null;
+  const warded = (wi) => (wi >= 0 ? { ward: wi } : null);
+
   const buildings = [], trees = [];
   let terraceRise = null;
   let greenLots = 0, roadLots = 0, accessLots = 0;
@@ -1138,27 +1245,36 @@ export function generateCity(input = {}) {
     const lots = lotCandidates(dom, pr.lot, rng, 0);
     const foot = dom.kind === 'plane' ? pr.lot * 0.97 : pr.lot * 0.58;
     const hTop = Math.max(step, Math.floor(H / step) * step);
+    // a ward asks for its own design height (the `height` multiplier) and answers to its own material limit
+    const wardTop = wardLimits && wardLimits.map((L) => { const Hw = Math.min(pr.designHeight * L.height, L.hMat, shellCap); return { H: Hw, hTop: Math.max(step, Math.floor(Hw / step) * step) }; });
+    const lotWard = wardAt ? lots.map(({ u, v }) => wardAt(u, v)) : null;
     const cellOf = []; // building index per candidate, −1 when the cell stays open (canyon, plaza, edge)
-    for (const { P, u, v } of lots) {
+    for (const [li, { P, u, v }] of lots.entries()) {
       const { S, A } = field.at(u, v);
       const amp = p.inverse ? 1 - A : A;
       const c = hash.clearance(P);
       if (c < foot * 0.71 + 1) { roadLots++; cellOf.push(-1); continue; }
       if (amp < 0.06) { greenLots++; trees.push({ pos: P, up: upAt(dom, P), s: 1 + rng() }); cellOf.push(-1); continue; }
-      const want = pr.designHeight * DM.pow(amp * (0.94 + 0.12 * rng()), 1.15);
-      const h = clamp(Math.round(want / step) * step, step, hTop);
-      if (h === hTop && want > hTop + step / 2 && H === hMat) binding.material++;
+      const wi = lotWard ? lotWard[li] : -1;
+      let want = pr.designHeight * DM.pow(amp * (0.94 + 0.12 * rng()), 1.15), top = hTop, cap = H, mat = hMat;
+      if (wi >= 0) { want *= wardLimits[wi].height; top = wardTop[wi].hTop; cap = wardTop[wi].H; mat = wardLimits[wi].hMat; }
+      const h = clamp(Math.round(want / step) * step, step, top);
+      if (h === top && want > top + step / 2 && cap === mat) binding.material++;
       const { up, fwd } = frame(P, u, v);
       cellOf.push(buildings.length);
       buildings.push({
         pos: P, up, fwd, w: foot, d: foot, h, floors: Math.round(h / pr.floorH), zone: zoneOf(amp),
         shape: 'terrace', polarity: S >= 0 ? 1 : -1, amp, district: districtAt(u, v), landmark: false,
-        ...(eraAt ? { era: eraAt(u, v) } : {}),
+        ...(eraAt ? { era: eraAt(u, v) } : {}), ...warded(wi),
       });
     }
     // Terracing: no cell may rise more than `rise` above any neighbour (an open cell counts as 0 m),
     // so every exposed face keeps the slenderness of a real tower. Dijkstra from the low cells.
-    terraceRise = p.enforce ? Math.max(step, Math.floor((slendernessLimit(8, p.gravity) * foot) / step) * step) : Infinity;
+    const riseFor = (g) => (p.enforce ? Math.max(step, Math.floor((slendernessLimit(8, g) * foot) / step) * step) : Infinity);
+    terraceRise = riseFor(p.gravity);
+    // a cell rises by the step of its own ward above each neighbour, whatever the neighbour's ward
+    const wardRise = wardLimits && wardLimits.map((L) => riseFor(L.g));
+    const riseAt = lotWard ? (i) => (lotWard[i] >= 0 ? wardRise[lotWard[i]] : terraceRise) : () => terraceRise;
     const nbrs = neighbourLists(dom, lots, pr.lot);
     // the faces are measured between terrace tops, so on terrain the ground step under each cell counts
     const zc = lots.map(({ u, v }) => terrain.z(u, v));
@@ -1172,14 +1288,14 @@ export function generateCity(input = {}) {
     };
     const edgeZ = cellOf.map((bi, i) => (bi >= 0 && nbrs[i].missing ? edgeGround(i) : null));
     // open cells are the ground; cells on the plate edge may rise only `terraceRise` above the open ground beside them
-    const hv = cellOf.map((bi, i) => (bi < 0 ? zc[i] : nbrs[i].missing ? Math.min(zc[i] + buildings[bi].h, edgeZ[i] + terraceRise) : zc[i] + buildings[bi].h));
+    const hv = cellOf.map((bi, i) => (bi < 0 ? zc[i] : nbrs[i].missing ? Math.min(zc[i] + buildings[bi].h, edgeZ[i] + riseAt(i)) : zc[i] + buildings[bi].h));
     const done = new Uint8Array(hv.length), heap = new MinHeap();
     hv.forEach((h, i) => heap.push(h, i));
     while (heap.size) {
       const [h, i] = heap.pop();
       if (done[i] || h !== hv[i]) continue;
       done[i] = 1;
-      for (const j of nbrs[i]) if (!done[j] && hv[j] > h + terraceRise) { hv[j] = h + terraceRise; heap.push(hv[j], j); }
+      for (const j of nbrs[i]) { const rise = riseAt(j); if (!done[j] && hv[j] > h + rise) { hv[j] = h + rise; heap.push(hv[j], j); } }
     }
     cellOf.forEach((bi, i) => {
       if (bi < 0) return;
@@ -1253,7 +1369,7 @@ export function generateCity(input = {}) {
       if (pr.style === 'town' && zone !== 'core') shape = 'house';
       buildings.push({
         pos: P, up, fwd, w, d, h: 0, floors, zone, shape, polarity: S >= 0 ? 1 : -1, amp,
-        district: districtAt(u, v), landmark: false, hdCell, ...(eraAt ? { era: eraAt(u, v) } : {}),
+        district: districtAt(u, v), landmark: false, hdCell, ...(eraAt ? { era: eraAt(u, v) } : {}), ...(wardAt ? warded(wardAt(u, v)) : null),
       });
       return true;
     };
@@ -1292,8 +1408,13 @@ export function generateCity(input = {}) {
     // a wider footprint must stay inside the lot's no-overlap radius and clear every road
     const canWiden = (b, W, D) => DM.hypot(W, D) / 2 <= b.hdCell + 1e-9 && fits(b.pos, b.up, b.fwd, W, D);
     // structural limits: widen toward the slenderness rule where the lot allows, else cap the height
+    const slenderWorld = slender, hMatWorld = hMat;
     for (const b of buildings) {
+      // a warded building asks for `height` times what the pattern gives it and answers to its ward's limits
+      const L = b.ward == null ? null : wardLimits[b.ward];
+      const slender = L ? L.slender : slenderWorld, hMat = L ? L.hMat : hMatWorld;
       let h = b.floors * pr.floorH;
+      if (L) h *= L.height;
       if (b.shape === 'dome') h = Math.min(h, 0.6 * Math.min(b.w, b.d));
       if (h > slender * Math.min(b.w, b.d)) {
         const need = h / slender;
@@ -1366,8 +1487,7 @@ export function generateCity(input = {}) {
   const maxStreetDistance = pr.arcology ? null : buildings.reduce((m, b) => Math.max(m, reachOf.get(b)), 0);
   const roadLen = rd.roads.reduce((s, r) => s + len3(sub(r.b, r.a)), 0);
   const roadArea = rd.roads.reduce((s, r) => s + len3(sub(r.b, r.a)) * r.w, 0);
-  const shapeVolume = { block: 1, house: 1, tower: 1, terrace: 1, pod: 0.785, dome: 0.5, spire: 0.33 };
-  const resShare = { residential: 0.9, mixed: 0.5, core: 0.25, green: 0 };
+  const shapeVolume = SHAPE_VOLUME, resShare = RES_SHARE;
   let gfa = 0, resGfa = 0, footprint = 0, maxH = 0;
   for (const b of buildings) {
     const area = b.w * b.d * (shapeVolume[b.shape] ?? 1);
@@ -1382,6 +1502,19 @@ export function generateCity(input = {}) {
   const haArea = dom.area / 1e4, km2 = dom.area / 1e6;
   const sizable = districts.sizes.filter((s) => s >= 0.002 * districts.sizes.reduce((a, b) => a + b, 0)).length;
   const lotArea = pr.lot * pr.lot;
+  const terraceLimitFor = (g) => Math.max(pr.terraceFloors * pr.floorH, Math.floor((slendernessLimit(8, g) * (dom.kind === 'plane' ? pr.lot * 0.97 : pr.lot * 0.58)) / (pr.terraceFloors * pr.floorH)) * pr.terraceFloors * pr.floorH);
+  const terraceLimit = pr.arcology ? terraceLimitFor(p.gravity) : null;
+  const steps = pr.arcology ? terraceSteps(dom, buildings, pr.lot, terrain) : null;
+  // wards: what each covers and holds up, measured on the finished city
+  let wardInfo = null;
+  if (wardPlan) {
+    const statics = p.magic.wards.map((w, i) => ({
+      where: w.where, districts: wardPlan.lists[i], gravity: w.gravity, strength: w.strength, pressure: w.pressure, height: w.height,
+      effectiveGravity: wardLimits[i].g, heightLimit: wardLimits[i].hLimit,
+      slendernessLimit: pr.arcology ? null : wardLimits[i].sLimit, terraceLimit: pr.arcology ? terraceLimitFor(wardLimits[i].g) : null,
+    }));
+    wardInfo = wardReport(statics, buildings, { arcology: !!pr.arcology }, { heightLimit: hLimit, slendernessLimit: sLimit, terraceLimit }, steps);
+  }
   const stats = {
     areaKm2: km2,
     buildings: buildings.length,
@@ -1403,7 +1536,7 @@ export function generateCity(input = {}) {
     nodalSpacing: rd.nodalSpacing,
     heightLimit: hLimit,
     slendernessLimit: sLimit,
-    terraceLimit: pr.arcology ? Math.max(pr.terraceFloors * pr.floorH, Math.floor((slendernessLimit(8, p.gravity) * (dom.kind === 'plane' ? pr.lot * 0.97 : pr.lot * 0.58)) / (pr.terraceFloors * pr.floorH)) * pr.terraceFloors * pr.floorH) : null,
+    terraceLimit,
     enforce: p.enforce,
     binding,
     // measured, not assumed
@@ -1411,10 +1544,11 @@ export function generateCity(input = {}) {
     maxStreetDistance, minRoadClearance,
     terrain: { mode: terrain.mode, relief: terrain.relief, waterLevel: Number.isFinite(terrain.waterLevel) ? terrain.waterLevel : null, shore: terrain.shore, waterShare, bridges, bridgeLength, waterLots, maxGrade },
     terraceRise,
-    maxTerraceStep: pr.arcology ? maxTerraceStep(dom, buildings, pr.lot, terrain) : null,
+    maxTerraceStep: steps ? steps.reduce((m, x) => Math.max(m, x), 0) : null,
     accessLimit: pr.arcology ? null : access,
     patternSharpness: resp.sharpness,
     eras: voices ? voices.map((_, i) => buildings.filter((b) => b.era === i).length) : null,
+    ...(wardInfo ? { wards: wardInfo.stats } : null),
   };
   const checks = plausibilityChecks(p, stats);
   const dominant = resp.active[0];
@@ -1433,12 +1567,14 @@ export function generateCity(input = {}) {
       azimuthal: p.azimuthal, sharpness: resp.sharpness,
       chord: voices ? voices.map((v) => ({ hz: v.hz, weight: v.weight, note: noteName(v.hz), dominant: modeLabel(v.resp.active[0]), sharpness: v.resp.sharpness, modes: v.resp.active.map((m) => ({ label: modeLabel(m), f: m.f, weight: m.weight, detuneHz: m.detuneHz })) })) : null,
       terrain: { mode: terrain.mode, relief: terrain.relief, waterLevel: Number.isFinite(terrain.waterLevel) ? terrain.waterLevel : null, freeboard: terrain.shore, canals: p.terrain.canals, heightmap: p.terrain.heightmap ? { width: p.terrain.heightmap.width, height: p.terrain.heightmap.height } : null },
+      ...(wardInfo ? { magic: { wards: wardInfo.wards.map((w) => ({ where: w.where, districts: w.districts, gravity: w.gravity, strength: w.strength, pressure: w.pressure, height: w.height })) } } : null),
     },
     roads: rd.roads,
     buildings,
     trees,
     stats,
     checks,
+    ...(wardInfo ? { wards: wardInfo.wards } : null),
     timingMs: Date.now() - t0, // excluded from toJSON so identical inputs give identical files
     // not serializable: lets a viewer paint the plate field onto the ground
     field: { at: (u, v) => field.at(u, v), toNorm: dom.toNorm, toWorld: dom.toWorld },
@@ -1449,6 +1585,39 @@ function symmetryNote(md) {
   if (md.plate === 'circle') return `${md.m} nodal diameter${md.m === 1 ? '' : 's'} and ${md.n} nodal circle${md.n === 1 ? '' : 's'} (rim included)`;
   if (md.plate === 'square') return `${md.m}×${md.n} lattice, ${md.sign > 0 ? 'centre-driven (+)' : 'off-centre (−)'} combination`;
   return `${md.l} nodal circles on the sphere: ${md.m} meridian${md.m === 1 ? '' : 's'} and ${md.l - md.m} latitude ring${md.l - md.m === 1 ? '' : 's'}`;
+}
+
+// What each ward covers and what stands only while it holds. `statics` are the wards' fixed fields (where,
+// districts, multipliers and limits); `world` holds the unwarded limits. A building is `dependent` when it breaks
+// one of the world's own limits: the material height, the slenderness rule, or for a terrace the step above its
+// lowest neighbour (`steps[i]`, or for a year frame `terraceDependent(b)`: terraces keep their height as they grow).
+// `worst` is the building nearest (or furthest past) its own limit under each rule: what the checks judge.
+export function wardReport(statics, buildings, meta, world, steps = null, terraceDependent = null) {
+  const arc = !!meta.arcology;
+  const wards = statics.map((w) => ({ ...w, buildings: 0, residents: 0, dependent: { buildings: [], residents: 0 } }));
+  const worst = { height: null, slenderness: null, terrace: null };
+  const worse = (cur, value, limit) => (!cur || value / limit > cur.value / cur.limit ? { value, limit } : cur);
+  buildings.forEach((b, i) => {
+    const w = b.ward == null ? null : wards[b.ward];
+    worst.height = worse(worst.height, b.h, w ? w.heightLimit : world.heightLimit);
+    const slim = !arc && b.shape !== 'dome' && b.shape !== 'terrace' ? b.h / Math.min(b.w, b.d) : null;
+    if (slim != null) worst.slenderness = worse(worst.slenderness, slim, w ? w.slendernessLimit : world.slendernessLimit);
+    if (arc && steps) worst.terrace = worse(worst.terrace, steps[i], w ? w.terraceLimit : world.terraceLimit);
+    if (!w) return;
+    const area = b.w * b.d * (SHAPE_VOLUME[b.shape] ?? 1) * b.floors * 0.7 * (arc ? ARCOLOGY_USABLE : 1);
+    const residents = (area * (arc ? 0.75 : RES_SHARE[b.zone] ?? 0.5)) / 45;
+    w.buildings++; w.residents += residents;
+    const breaks = b.h > world.heightLimit + 1e-6
+      || (slim != null && slim > world.slendernessLimit + 1e-6)
+      || (arc && (steps ? steps[i] > world.terraceLimit + 1e-6 : !!terraceDependent?.(b)));
+    if (breaks) { w.dependent.buildings.push(i); w.dependent.residents += residents; }
+  });
+  for (const w of wards) { w.residents = Math.round(w.residents); w.dependent.residents = Math.round(w.dependent.residents); }
+  const sum = (f) => wards.reduce((s, w) => s + f(w), 0);
+  return {
+    wards,
+    stats: { count: wards.length, buildings: sum((w) => w.buildings), residents: sum((w) => w.residents), dependent: sum((w) => w.dependent.buildings.length), dependentResidents: sum((w) => w.dependent.residents), worst },
+  };
 }
 
 // Recompute the plausibility checks for a layout whose buildings changed (a simulation keyframe).
@@ -1474,17 +1643,24 @@ function plausibilityChecks(p, s) {
         s.densityPerHa >= 150 ? 'pass' : 'warn', 'UN-Habitat: at least 150 people/ha');
     }
   }
-  add('self-weight', 'Tallest structure vs. material limit', `${s.maxHeight.toFixed(0)} m of ${s.heightLimit.toFixed(0)} m`,
-    s.maxHeight <= s.heightLimit + 1e-6 ? 'pass' : 'fail', `σ/(ρ·g·${SAFETY_FACTOR}) for the chosen material and gravity`);
+  // with wards every building answers to its own limit, so the checks judge the one nearest (or furthest past) its own
+  const ww = s.wards?.worst, own = ww ? '; each building by its ward\'s limit' : '';
+  const hv = ww?.height ?? { value: s.maxHeight, limit: s.heightLimit };
+  add('self-weight', 'Tallest structure vs. material limit', `${hv.value.toFixed(0)} m of ${hv.limit.toFixed(0)} m`,
+    hv.value <= hv.limit + 1e-6 ? 'pass' : 'fail', `σ/(ρ·g·${SAFETY_FACTOR}) for the chosen material and gravity${own}`);
   if (urban) {
-    add('slenderness', 'Most slender building', `1:${s.maxSlenderness.toFixed(1)} (limit 1:${s.slendernessLimit.toFixed(1)})`,
-      s.maxSlenderness <= s.slendernessLimit + 1e-6 ? 'pass' : 'fail', 'Slender above 1:10–1:12; record about 1:24 (111 W 57th St)');
+    const sv = ww?.slenderness ?? { value: s.maxSlenderness, limit: s.slendernessLimit };
+    add('slenderness', 'Most slender building', `1:${sv.value.toFixed(1)} (limit 1:${sv.limit.toFixed(1)})`,
+      sv.value <= sv.limit + 1e-6 ? 'pass' : 'fail', `Slender above 1:10–1:12; record about 1:24 (111 W 57th St)${own}`);
     add('access', 'Farthest building from a street', `${s.maxStreetDistance.toFixed(0)} m (limit ${s.accessLimit.toFixed(0)} m)`,
       s.maxStreetDistance <= s.accessLimit + 1e-6 ? 'pass' : 'fail', 'Lots beyond walking reach become green space');
   } else {
-    add('terrace', 'Largest terrace step', `${s.maxTerraceStep.toFixed(0)} m (limit ${s.terraceLimit.toFixed(0)} m)`,
-      s.maxTerraceStep <= s.terraceLimit + 1e-6 ? 'pass' : 'fail', 'Each exposed face kept within 1:8 slenderness; open canyons count as 0 m');
+    const tv = ww?.terrace ?? { value: s.maxTerraceStep, limit: s.terraceLimit };
+    add('terrace', 'Largest terrace step', `${tv.value.toFixed(0)} m (limit ${tv.limit.toFixed(0)} m)`,
+      tv.value <= tv.limit + 1e-6 ? 'pass' : 'fail', `Each exposed face kept within 1:8 slenderness; open canyons count as 0 m${own}`);
   }
+  if (s.wards) add('ward-dependence', 'Standing only while a ward holds', `${s.wards.dependent} of ${s.wards.buildings} warded building${s.wards.buildings === 1 ? '' : 's'}, ${s.wards.dependentResidents} resident${s.wards.dependentResidents === 1 ? '' : 's'}`,
+    'info', 'Buildings inside a ward that break the world\'s own limits (material height, slenderness or terrace step); impact() with kind "ward" lists them');
   if (s.terrain && s.terrain.mode !== 'flat') {
     add('street-grade', 'Steepest street', `${(100 * s.terrain.maxGrade).toFixed(1)} %`,
       s.terrain.maxGrade <= 0.10 ? 'pass' : s.terrain.maxGrade <= 0.15 ? 'warn' : 'fail', 'Arterials up to 6–8 %, local streets to 10 %; above 15 % streets become stairs');

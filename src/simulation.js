@@ -1,8 +1,8 @@
 // Simulation layer: a time axis (growth, ageing, densification, keyframes), an hourly flow model
 // (water pressure, feeder voltage, sewer fullness, metro loads) and failure analysis (what breaks
 // when an asset fails; N-1 resilience). Constants and formulas are in docs/research-notes/simulation_standards.md.
-import { mulberry32, CORE_FLOORS, MIN_CORE_SIDE, checksFor } from './cymatic-engine.js';
-import { buildInfrastructure, SEWER, TRANSIT } from './infrastructure.js';
+import { mulberry32, CORE_FLOORS, MIN_CORE_SIDE, checksFor, wardReport } from './cymatic-engine.js';
+import { buildInfrastructure, wardGravity, SEWER, TRANSIT } from './infrastructure.js';
 import { DM } from './detmath.js';
 
 const G0 = 9.80665;
@@ -123,7 +123,9 @@ export function schedule(layout, opts = {}) {
   const meta = layout.meta, graph = infra.graph;
   const rng = mulberry32((meta.seed * 7919 + 101) >>> 0);
   const enforce = meta.enforce !== false;
-  const hMat = enforce ? layout.stats.heightLimit : Infinity, slender = enforce ? layout.stats.slendernessLimit : Infinity;
+  const hMatWorld = enforce ? layout.stats.heightLimit : Infinity, slenderWorld = enforce ? layout.stats.slendernessLimit : Infinity;
+  // a warded building grows against its ward's limits (its floors already carry the ward's `height`)
+  const wardLimit = (b) => (b.ward == null ? null : layout.wards?.[b.ward] ?? null);
   const floorH = meta.presetSpec?.floorH ?? { town: 3.0, city: 3.4, megastructure: 5.0, alien: 5.5 }[meta.base ?? meta.preset] ?? 3.4;
 
   // founding nucleus: the strongest antinode nearest the drive point
@@ -153,7 +155,8 @@ export function schedule(layout, opts = {}) {
     const q = score.length > 1 ? rank / (score.length - 1) : 0; // first building at year 0, last at the horizon
     const built = Math.round(10 * DM.log(1 + q * denom) / r) / 10;
     const b = layout.buildings[sc.i], side = Math.min(b.w, b.d), F = b.floors;
-    const amp = b.amp, arc = b.shape === 'terrace';
+    const amp = b.amp, arc = b.shape === 'terrace', ward = wardLimit(b);
+    const hMat = ward && enforce ? ward.heightLimit : hMatWorld, slender = ward && enforce ? ward.slendernessLimit ?? Infinity : slenderWorld;
     const cap = (floors) => {
       let f = Math.max(1, Math.round(floors));
       if (enforce) {
@@ -250,6 +253,14 @@ export function frameAt(layout, sched, year) {
   sub.stats = { ...layout.stats, ...cs, roadSegments: roads.length, roadLengthKm: roadLen / 1000, streetDensity: roadLen / 1000 / (meta.world.area / 1e6), roadShare: roadArea / meta.world.area,
     densityPerHa: cs.population / (meta.world.area / 1e4), tallest: buildings.reduce((m, b) => Math.max(m, b.floors), 0),
     maxSlenderness: buildings.reduce((m, b) => (b.shape === 'dome' || b.shape === 'terrace' ? m : Math.max(m, b.h / Math.min(b.w, b.d))), 0) };
+  if (layout.wards) {
+    // the wards as they stood that year; terraces keep their height as they grow, so their dependence carries over
+    const dependent = new Set(layout.wards.flatMap((w) => w.dependent.buildings));
+    const statics = layout.wards.map(({ buildings: _b, residents: _r, dependent: _d, ...fixed }) => fixed);
+    const r = wardReport(statics, buildings, meta, layout.stats, null, (b) => dependent.has(b.source));
+    r.stats.worst.terrace = layout.stats.wards?.worst.terrace ?? null;
+    sub.wards = r.wards; sub.stats.wards = r.stats;
+  }
   sub.checks = checksFor(sub.meta, sub.stats);
   const stats = { year, ...cs, roadSegments: roads.length };
   return { year, layout: sub, infra: inf, stats };
@@ -314,7 +325,9 @@ function describeKeyframe(k, built, replaced, s, prev) {
 // ---------------------------------------------------------------- flows
 export function flows(layout, infra, hour = 8, opts = {}) {
   const h = ((Math.round(hour) % 24) + 24) % 24;
-  const g = layout.meta.gravity ?? 1, N = infra.graph.nodes.length, nodes = infra.graph.nodes;
+  const N = infra.graph.nodes.length, nodes = infra.graph.nodes;
+  // gravity at a node, and the gravity its head rules see: the world's unless a ward holds the node
+  const wg = wardGravity(layout.meta), gOf = (i) => wg.gAt(nodes[i] ?? {}), headG = (i) => wg.headGAt(nodes[i] ?? {});
   const C = opts.hazenC ?? 130;
 
   // ---- water: Hazen-Williams along the distribution forest from each tank
@@ -324,7 +337,7 @@ export function flows(layout, infra, hour = 8, opts = {}) {
   // head[] is the pressure head (m of water) at each node: hydraulic grade line minus ground elevation; on terrain the
   // tank's own elevation counts, and a pressure-reducing valve resets the grade line to the limit below it
   const elev = (i) => nodes[i].elev ?? 0;
-  const prvAt = new Map((infra.water.prvs ?? []).map((p) => [p.node, p.outletHeadM ?? 56 / g]));
+  const prvAt = new Map((infra.water.prvs ?? []).map((p) => [p.node, p.outletHeadM ?? 56 / headG(p.node)]));
   const head = new Float64Array(N), nodePressure = new Float64Array(N);
   const mainsOut = new Map();
   let totalFlow = 0;
@@ -347,13 +360,15 @@ export function flows(layout, infra, hour = 8, opts = {}) {
   const served = new Uint8Array(N);
   for (const t of infra.water.towers) served[t.node] = 1;
   for (const m of infra.water.mains) if (m.tree) served[m.tree[0]] = 1;
-  for (let i = 0; i < N; i++) nodePressure[i] = served[i] ? Math.max(0, 9.81 * g * head[i]) : 0;
+  for (let i = 0; i < N; i++) nodePressure[i] = served[i] ? Math.max(0, 9.81 * headG(i) * head[i]) : 0;
   totalFlow = infra.laterals.reduce((s, l) => s + ((l.residents * 300 + l.jobs * 60) / 86400 / 1000) * fw, 0);
   // pressure flags count nodes with customers: a main crossing an empty hilltop may run low without anyone noticing
   const customer = new Uint8Array(N); for (const l of infra.laterals) customer[l.node] = 1;
   let minPressure = Infinity, lowNodes = 0, criticalNodes = 0;
   for (let i = 0; i < N; i++) if (served[i] && customer[i]) { minPressure = Math.min(minPressure, nodePressure[i]); if (nodePressure[i] < 241) lowNodes++; if (nodePressure[i] < 140) criticalNodes++; }
-  const water = { nodePressure, minPressure: Number.isFinite(minPressure) ? minPressure : 0, lowNodes, criticalNodes, totalFlow, mains: [...mainsOut.values()], staticKPa: 9.81 * g * infra.water.towerHeight };
+  // the design pressure: the design tank height under the gravity of the tallest tank (one figure without wards)
+  const tallestTank = infra.water.towers.reduce((m, t) => (!m || t.height > m.height ? t : m), null);
+  const water = { nodePressure, minPressure: Number.isFinite(minPressure) ? minPressure : 0, lowNodes, criticalNodes, totalFlow, mains: [...mainsOut.values()], staticKPa: 9.81 * headG(tallestTank?.node ?? 0) * infra.water.towerHeight };
 
   // ---- power: voltage drop along feeders from each substation bus
   let resLoad = 0, jobLoad = 0;
@@ -398,7 +413,7 @@ export function flows(layout, infra, hour = 8, opts = {}) {
     if (p.forceMain) fullness = 1;
     else {
       const A = Math.PI * p.diameter * p.diameter / 4, R = p.diameter / 4;
-      const Qfull = A * (1 / SEWER.manningN) * DM.pow(R, 2 / 3) * Math.sqrt(p.slope) * Math.sqrt(g);
+      const Qfull = A * (1 / SEWER.manningN) * DM.pow(R, 2 / 3) * Math.sqrt(p.slope) * Math.sqrt(gOf(p.up));
       fullness = partialFlowDepth(Qfull > 0 ? Q / Qfull : 0);
     }
     if (!p.forceMain && fullness > 1) surcharged++;
@@ -492,6 +507,7 @@ export function impact(layout, infra, asset) {
     treatment: ['sewage treatment plant', infra.sewer.plants], lift: ['lift station', infra.sewer.liftStations], sewer: ['sewer pipe', infra.sewer.pipes],
     plant: ['power plant', infra.power.plants], substation: ['substation', infra.power.substations], power: ['feeder', infra.power.feeders],
     transmission: ['transmission line', infra.power.transmission], transit: ['metro tunnel', infra.transit.tunnels], station: ['metro station', infra.transit.stations],
+    ward: ['ward', layout.wards ?? []],
   };
   if (!ASSETS[kind]) throw new Error(`Unknown asset kind "${kind}" (${Object.keys(ASSETS).join(', ')})`);
   const index = asset.index ?? 0, [noun, list] = ASSETS[kind], count = (list ?? []).filter(Boolean).length;
@@ -509,6 +525,19 @@ export function impact(layout, infra, asset) {
     share: people(affectedLats) / totalPeople, ...extra, summary,
   });
   const pct = (x) => `${(100 * x).toFixed(x < 0.01 ? 2 : 0)} %`;
+
+  // ---- a ward fails: what stood only while it held (the buildings that break the world's own limits)
+  if (kind === 'ward') {
+    const w = layout.wards[index], gone = new Set(w.dependent.buildings);
+    const lats = infra.laterals.filter((l) => gone.has(l.building));
+    return {
+      kind, index, affected: [...w.dependent.buildings], degraded: [], people: w.dependent.residents, degradedPeople: 0, jobs: Math.round(jobsOf(lats)),
+      share: people(lats) / totalPeople,
+      summary: gone.size
+        ? `Ward ${index + 1} fails: ${gone.size.toLocaleString('en-US')} of its ${w.buildings.toLocaleString('en-US')} buildings break the world's own limits and stand only while it holds (${w.dependent.residents.toLocaleString('en-US')} residents, ${pct(people(lats) / totalPeople)}).`
+        : `Ward ${index + 1} fails: nothing falls. None of its ${w.buildings.toLocaleString('en-US')} buildings breaks the world's own limits.`,
+    };
+  }
 
   // ---- water
   const waterReachable = (excludeTower, excludeEdge) => {
