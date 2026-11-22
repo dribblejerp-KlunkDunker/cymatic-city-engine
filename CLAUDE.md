@@ -28,7 +28,8 @@ returns 25 rows unless `limit` is set: aggregate or name `fields` before raising
 `src/` is ~290 KB and README.md ~60 KB: find with Grep, then read the line range you need.
 `grep -n '^## ' README.md` lists its sections; **Module API** and **Data contract** hold signatures and
 shapes. The reason behind a rule or constant lives in `docs/research-notes/<topic>.md`; past review findings
-in CHANGELOG.md; what is next in ROADMAP.md and `docs/PHASE6-SPEC.md`.
+in CHANGELOG.md; what is next in ROADMAP.md and `docs/PHASE7-SPEC.md` (Phase 6's spec is
+`docs/PHASE6-SPEC.md`; the scripts behind Phase 7's numbers are in `docs/phase7-measurements/`).
 
 ## Invariants — a broken invariant is a bug even when tests pass
 
