@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cymatic": {
+      "command": "node",
+      "args": ["bin/cymatic-mcp.mjs"]
+    }
+  }
+}
