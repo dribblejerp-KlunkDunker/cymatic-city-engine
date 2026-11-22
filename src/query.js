@@ -13,9 +13,10 @@ import { generateCity, enumerateModes, drivenResponse, frequencyRange, modeLabel
 import { buildInfrastructure, TRANSIT, dijkstra } from './infrastructure.js';
 import { impact as failImpact } from './simulation.js';
 import { people as runPeople } from './people.js';
+import { DM } from './detmath.js';
 
-const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-const round = (x, k = 3) => (Number.isFinite(x) ? Math.round(x * 10 ** k) / 10 ** k : x);
+const dist = (a, b) => DM.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+const round = (x, k = 3) => (Number.isFinite(x) ? Math.round(x * DM.pow(10, k)) / DM.pow(10, k) : x);
 
 // ---------------------------------------------------------------- the city bundle
 // A city is a layout plus what has been computed on it. Networks and the commute are computed on first use and
@@ -381,7 +382,7 @@ function planOf(L) {
   return {
     buildings: s.buildings, population: s.population, jobs: s.jobs, tallest: s.maxHeight, streetKm: s.roadLengthKm, districts: s.districts,
     greenShare: s.greenShare ?? (s.lots ? s.greenLots / s.lots : NaN), densityPerHa: s.densityPerHa,
-    centralPlaza: plane ? !L.buildings.some((b) => Math.hypot(b.pos[0] - centre[0], b.pos[2] - centre[2]) < r0) : false,
+    centralPlaza: plane ? !L.buildings.some((b) => DM.hypot(b.pos[0] - centre[0], b.pos[2] - centre[2]) < r0) : false,
     failingChecks: L.checks.filter((c) => c.status === 'fail').length,
   };
 }
@@ -389,12 +390,13 @@ const infraOf = (I) => ({ liftStations: I.stats.liftStations, substations: I.sta
 const peopleOf = (P) => ({ meanCommuteMin: P.stats.meanTripMin, metroShare: P.stats.modeShare.metro, congestedKm: P.stats.congestedKm });
 
 // Evaluate the named metrics of a profile, building only the stages they need.
-export function metricsOf(profile, names) {
+// `opts.city` measures a city already built (a year of growth, say) instead of building the profile's plan
+export function metricsOf(profile, names, opts = {}) {
   const want = new Set(names), stages = new Set([...want].map((n) => { if (!METRICS[n]) throw new Error(`Unknown metric "${n}". Metrics: ${Object.keys(METRICS).join(', ')}`); return METRICS[n].stage; }));
   const out = {};
   if (stages.has('physics')) Object.assign(out, physicsOf(resolvedProfile(profile)));
   if (stages.has('plan') || stages.has('infra') || stages.has('people')) {
-    const city = cityOf(generateCity(profile));
+    const city = opts.city ?? cityOf(generateCity(profile));
     Object.assign(out, planOf(city.layout));
     if (stages.has('infra') || stages.has('people')) Object.assign(out, infraOf(city.infra));
     if (stages.has('people')) Object.assign(out, peopleOf(city.people));
@@ -457,8 +459,8 @@ export function search(spec, onProgress = () => {}) {
     const modes = enumerateModes({ plate, fundamentalHz: fund, driveOffset: base.driveOffset, azimuthal: base.azimuthal });
     const best = new Map();
     for (let i = 0; i < scan; i++) {
-      const f = lo * Math.pow(hi / lo, (i + rng()) / scan);
-      const Q = Qr ? Qr[0] * Math.pow(Qr[1] / Qr[0], rng()) : base.Q ?? 100;
+      const f = lo * DM.pow(hi / lo, (i + rng()) / scan);
+      const Q = Qr ? Qr[0] * DM.pow(Qr[1] / Qr[0], rng()) : base.Q ?? 100;
       const driveOffset = Dr ? Dr[0] + (Dr[1] - Dr[0]) * rng() : base.driveOffset;
       const md = Dr ? enumerateModes({ plate, fundamentalHz: fund, driveOffset, azimuthal: base.azimuthal }) : modes;
       let r; try { r = drivenResponse(md, f, Q); } catch { continue; }
@@ -516,7 +518,7 @@ export function search(spec, onProgress = () => {}) {
     const [flo, fhi] = frequencyRange(plate, p.fundamentalHz ?? PLATES[plate].defaultFundamental);
     const [vlo, vhi] = Array.isArray(vary.frequency) ? [Math.max(flo, vary.frequency[0]), Math.min(fhi, vary.frequency[1])] : [flo, fhi];
     const f = Math.min(vhi, Math.max(vlo, p.frequency * (1 + (rng() - 0.5) * 0.06)));
-    const Q = vary.Q ? Math.min(vary.Q[1], Math.max(vary.Q[0], p.Q * Math.pow(1.5, rng() * 2 - 1))) : p.Q;
+    const Q = vary.Q ? Math.min(vary.Q[1], Math.max(vary.Q[0], p.Q * DM.pow(1.5, rng() * 2 - 1))) : p.Q;
     const prof = { ...p, frequency: round(f, 2), Q: round(Q, 2) };
     const phys = physicsOf(resolvedProfile(prof));
     if (byStage('physics').some((c) => violation(phys[c.metric], c) > 0)) continue;

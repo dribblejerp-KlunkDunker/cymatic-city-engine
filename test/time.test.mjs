@@ -12,31 +12,34 @@ import { simulate, schedule, frameAt, cityAt } from '../src/simulation.js';
 import { run } from '../bin/cymatic.mjs';
 
 const TOWN = { frequency: 432, preset: 'town' };
-// hashes are taken with the engine version written as 1.5.0, so a version bump alone does not move them
-const sha = (s) => createHash('sha256').update(s.split(`"engine":"${ENGINE_VERSION}"`).join('"engine":"1.5.0"')).digest('hex').slice(0, 16);
+// hashes are taken with the engine version blanked, so a version bump alone does not move them
+const sha = (s) => createHash('sha256').update(s.split(`"engine":"${ENGINE_VERSION}"`).join('"engine":""')).digest('hex').slice(0, 16);
 const cli = (...args) => { const lines = []; const code = run(args, { log: (s) => lines.push(s) }); return { code, out: lines.join('\n') }; };
 const tmp = (name) => join(mkdtempSync(join(tmpdir(), 'time-')), name);
 const cache = new Map();
 const town = (o = TOWN) => { const k = JSON.stringify(o); if (!cache.has(k)) cache.set(k, generateCity(o)); return cache.get(k); };
 
-// Recorded on engine 1.5.0, before simulate() was split into schedule() and frameAt(): the hash of toJSON of
-// every keyframe (years 100, 8 keyframes), of the events and of the history. To re-record after an intended
-// change to growth: run this file with CYMATIC_RECORD=1 and paste the printed object here.
+// Growth, pinned: the hash of toJSON of every keyframe (years 100, 8 keyframes), of the events and of the history.
+// History of these numbers: recorded on 1.5.0 before simulate() was split into schedule() and frameAt(), and
+// unchanged by the split (commit 41fbe43); re-recorded once in 1.6.0 when every stage moved to deterministic math
+// (src/detmath.js) and year frames gained meta.horizon. Since then they are the same in every runtime:
+// test/page.test.mjs hashes the same cities in Chromium. To re-record after an intended change to growth, run
+// this file with CYMATIC_RECORD=1 and paste the printed objects here.
 const GOLDEN = {
-  plain: { keyframes: ['9aef662d4335e4d4', 'cc605a577614ab5c', 'a2820b47fc6c2932', '9a8c08a89ba2ec27', 'c3add19b647ed892', 'ffcf58ef26c0ed31', 'e7b3805939de29d0', '2d98baaa444001c9'], events: '11c3a725b75c9e9d', history: '93a68dbaaede64c8', rest: 'fea03e62b43bcd2a' },
-  chord: { keyframes: ['fe01a6eceae3a83d', '22e195876d0cc908', 'a2279db01ebe5a00', '56db7e27ff030bc5', '017094f771a646eb', '455374506dcd93bc', 'cd11791cad176c05', '94e81bc440539a3a'], events: '9c22d54a6c89eaae', history: 'b22baa793cc19996', rest: '00fe89552d75dc77' },
-  valleys: { keyframes: ['9a8446dd023cad46', '6709266099c58b4f', '50e70c92f6ef4347', '2d95a90da6382763', '9d6f47c53df39431', '93921a05dc974417', 'fd6712773bcde00a', 'a426c31b0ff4c0f4'], events: 'bef0328929cb93c8', history: 'b6d150b23c69e0af', rest: 'fea03e62b43bcd2a' },
+  plain: { keyframes: ['43850a22e18957e0', '6ea65e76e996ccac', '67433c070a992827', '1ebc50d16c686382', 'caa72e2c16b4adba', 'a7002ed82420d7df', '7c9332c6b984270d', '08068bfe5da002ac'], events: '11c3a725b75c9e9d', history: '59c7d5aafcd0debf', rest: 'fea03e62b43bcd2a' },
+  chord: { keyframes: ['5e355c755989f912', 'c41207d8eb982bbe', '6e46dbee6e019853', '608f1463c31f84c1', '79d58a201dffb5d6', '4f4c9c55865f05b5', 'b8929c0feb639b1c', '5e64cf9331be6900'], events: '9c22d54a6c89eaae', history: 'bd122a015a62eacd', rest: '00fe89552d75dc77' },
+  valleys: { keyframes: ['db157b597aafd340', '94f8cce1a57ec431', 'a6614c47dc8b6333', '7dff6e0b5af6894a', '2a538669e325f52d', '379745c70c8b325d', '2bf826d0c562492c', '7995965b053624e1'], events: 'bef0328929cb93c8', history: 'd2daa640d4f73743', rest: 'fea03e62b43bcd2a' },
 };
 const GOLDEN_PROFILES = { plain: TOWN, chord: { chord: [432, 540], preset: 'town' }, valleys: { ...TOWN, terrain: 'valleys' } };
-const GOLDEN_TOWN_JSON = 'adfbbb99219006fb'; // toJSON(generateCity(TOWN)) on 1.5.0
+const GOLDEN_TOWN_JSON = 'df04083d97da14b0'; // toJSON(generateCity(TOWN))
 
-test('splitting simulate() changed nothing: every keyframe, the events and the history hash as on 1.5.0', () => {
+test('growth is pinned: every keyframe, the events and the history hash as recorded', () => {
   const got = {};
   for (const [name, p] of Object.entries(GOLDEN_PROFILES)) {
     const sim = simulate(generateCity(p), { years: 100, keyframes: 8 });
     got[name] = { keyframes: sim.keyframes.map((k) => sha(toJSON(k.layout))), events: sha(JSON.stringify(sim.events)), history: sha(JSON.stringify(sim.history)), rest: sha(JSON.stringify([sim.years, sim.founding, sim.eraStarts])) };
   }
-  if (process.env.CYMATIC_RECORD) console.log(JSON.stringify(got));
+  if (process.env.CYMATIC_RECORD) console.log(JSON.stringify(got), sha(toJSON(generateCity(TOWN))));
   assert.deepEqual(got, GOLDEN);
 });
 
@@ -48,6 +51,10 @@ test('cityAt is the keyframe: year 80 of a 100-year growth, field for field, and
   assert.deepEqual(at.stats, key.stats);
   assert.equal(at.year, 80);
   assert.equal(at.layout.meta.year, 80);
+  // a frame names the horizon its year is measured in: the year alone would name two different towns
+  assert.equal(at.layout.meta.horizon, 100);
+  assert.equal(cityAt(L, { year: 80, horizon: 80 }).layout.meta.horizon, 80);
+  assert.equal(L.meta.horizon, undefined, 'the plan itself has no year and no horizon');
   // the default horizon is 100
   assert.equal(toJSON(cityAt(L, { year: 80 }).layout), toJSON(key.layout));
   // the pieces are the whole: a frame of the schedule is the keyframe, and the schedule carries the history
@@ -100,41 +107,71 @@ test('cityAt refuses years outside the growth and anything that is not a number,
 
 test('CLI generate --year writes cityAt; the horizon comes from --horizon, then the profile, then 100', () => {
   const L = town(), args = ['-f', '432', '--preset', 'town'];
-  const want = (horizon) => toJSON(cityAt(L, { year: 80, horizon }).layout);
+  const want = (horizon, year = 80) => toJSON(cityAt(L, { year, horizon }).layout);
   const a = tmp('a.json');
-  const r = cli('generate', ...args, '--year', '80', '--out', a, '--json');
+  const r = cli('generate', ...args, '--year', '80', '--infra', '--out', a, '--json');
   assert.equal(r.code, 0);
   assert.equal(readFileSync(a, 'utf8'), want(100));
   const said = JSON.parse(r.out);
   assert.deepEqual({ year: said.year, horizon: said.horizon, format: said.format, buildings: said.buildings }, { year: 80, horizon: 100, format: 'json', buildings: cityAt(L, { year: 80 }).layout.buildings.length });
   assert.equal(said.bytes, readFileSync(a).length, 'bytes on disk, not characters');
+  // --infra decides whether the networks are written, for a year as for the plan
+  const bare = tmp('bare.json');
+  cli('generate', ...args, '--year', '80', '--out', bare);
+  const withNets = JSON.parse(readFileSync(a, 'utf8')), without = JSON.parse(readFileSync(bare, 'utf8'));
+  assert.ok(withNets.infra && !('infra' in without));
+  assert.deepEqual(without, (({ infra, ...rest }) => rest)(withNets));
+  assert.equal(without.meta.year, 80); assert.equal(without.meta.horizon, 100);
   // the profile's horizon is used when no flag names one
   const b = tmp('b.json');
-  cli('generate', JSON.stringify({ ...TOWN, horizon: 80 }), '--year', '80', '--out', b);
+  cli('generate', JSON.stringify({ ...TOWN, horizon: 80 }), '--year', '80', '--infra', '--out', b);
   assert.equal(readFileSync(b, 'utf8'), want(80));
   assert.notEqual(want(80), want(100));
   // and the flag wins over the profile
   const c = tmp('c.json');
-  cli('generate', JSON.stringify({ ...TOWN, horizon: 80 }), '--year', '80', '--horizon', '120', '--out', c);
+  cli('generate', JSON.stringify({ ...TOWN, horizon: 80 }), '--year', '80', '--horizon', '120', '--infra', '--out', c);
   assert.equal(readFileSync(c, 'utf8'), want(120));
-  // text output names the year and the horizon
-  assert.match(cli('generate', ...args, '--year', '80', '--horizon', '120', '--out', tmp('d.json')).out, /year 80 of 120/);
-  // export is the same command
+  // a profile that names its own year (saved from the page while a year was shown) is built at that year…
+  const d = tmp('d.json');
+  cli('generate', JSON.stringify({ ...TOWN, year: 40, horizon: 80 }), '--infra', '--out', d);
+  assert.equal(readFileSync(d, 'utf8'), want(80, 40));
+  // …unless the flag names another
   const e = tmp('e.json');
-  cli('export', ...args, '--year', '80', '--out', e);
-  assert.equal(readFileSync(e, 'utf8'), want(100));
+  cli('generate', JSON.stringify({ ...TOWN, year: 40, horizon: 80 }), '--year', '60', '--infra', '--out', e);
+  assert.equal(readFileSync(e, 'utf8'), want(80, 60));
+  // text output names the year and the horizon
+  assert.match(cli('generate', ...args, '--year', '80', '--horizon', '120', '--out', tmp('t.json')).out, /year 80 of 120/);
+  // export is the same command
+  const x = tmp('x.json');
+  cli('export', ...args, '--year', '80', '--infra', '--out', x);
+  assert.equal(readFileSync(x, 'utf8'), want(100));
   // refusals
   assert.throws(() => cli('generate', ...args, '--horizon', '80', '--out', tmp('f.json')), /--horizon .* --year/);
   assert.throws(() => cli('generate', ...args, '--year', '200', '--out', tmp('g.json')), /year 200 .*100/);
   assert.throws(() => cli('generate', JSON.stringify({ ...TOWN, horizon: 'long' }), '--year', '5', '--out', tmp('h.json')), /horizon must be a number/);
-  // --year reaches the other commands too: the summary is the town of that year
-  const s = JSON.parse(cli('summary', ...args, '--year', '40', '--json').out);
-  assert.equal(s.stats.buildings, cityAt(L, { year: 40 }).layout.buildings.length);
+  assert.throws(() => cli('generate', JSON.stringify({ ...TOWN, year: 'soon' }), '--out', tmp('i.json')), /year must be a number/);
 });
 
-test('old profiles are untouched: no horizon key, or a horizon without --year, exports the 1.5.0 bytes', () => {
+test('--year reaches every city command, metrics included', () => {
+  const L = town(), args = ['-f', '432', '--preset', 'town'], at40 = cityAt(L, { year: 40 }).layout;
+  const s = JSON.parse(cli('summary', ...args, '--year', '40', '--json').out);
+  assert.equal(s.stats.buildings, at40.buildings.length);
+  assert.deepEqual([s.year, s.horizon], [40, 100]);
+  assert.match(cli('summary', ...args, '--year', '40').out, /year 40 of 100$/);
+  const young = JSON.parse(cli('metrics', ...args, '--year', '40', 'population', 'buildings', '--json').out), grown = JSON.parse(cli('metrics', ...args, 'population', 'buildings', '--json').out);
+  assert.equal(young.buildings, at40.buildings.length);
+  assert.equal(grown.buildings, L.buildings.length);
+  assert.ok(young.population < grown.population && young.population === at40.stats.population);
+  assert.equal(JSON.parse(cli('metrics', JSON.stringify({ ...TOWN, year: 40 }), 'buildings', '--json').out).buildings, at40.buildings.length, 'the profile’s year counts too');
+  const q = JSON.parse(cli('query', ...args, '--year', '40', '--q', '{"from":"buildings","aggregate":{"n":"count"}}', '--json').out);
+  assert.equal(q.rows[0].n, at40.buildings.length);
+  assert.equal(JSON.parse(cli('checks', ...args, '--year', '40', '--json').out).length, at40.checks.length);
+});
+
+test('a profile without a year builds the plan, and a horizon alone changes nothing', () => {
   assert.equal(sha(toJSON(generateCity(TOWN))), GOLDEN_TOWN_JSON);
   assert.equal(toJSON(generateCity({ ...TOWN, horizon: 80 })), toJSON(generateCity(TOWN)), 'the generator ignores the horizon');
+  assert.equal(toJSON(generateCity({ ...TOWN, year: 40 })), toJSON(generateCity(TOWN)), 'and the year: only growth reads them');
   const a = tmp('a.json'), b = tmp('b.json'), p = tmp('profile.json');
   writeFileSync(p, JSON.stringify({ engine: '1.5.0', ...TOWN, theme: 'realistic' })); // as the page saved it on 1.5.0
   cli('generate', p, '--out', a);

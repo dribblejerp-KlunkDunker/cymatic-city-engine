@@ -3,12 +3,13 @@
 // plant with substations and feeders, metro tunnels under the foundations, and utility tunnels for
 // arcologies. Pure data in, pure data out; the viewer draws it and the tests check it.
 import { mulberry32 } from './cymatic-engine.js';
+import { DM } from './detmath.js';
 
 const G0 = 9.80665;
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const scale3 = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
-const len3 = (a) => Math.hypot(a[0], a[1], a[2]);
+const len3 = (a) => DM.hypot(a[0], a[1], a[2]);
 const norm3 = (a) => { const l = len3(a); return l > 0 ? [a[0] / l, a[1] / l, a[2] / l] : [0, 1, 0]; };
 const dist = (a, b) => len3(sub(a, b));
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
@@ -30,13 +31,13 @@ const SLOPE_TABLE = [[0.2, 0.004], [0.25, 0.0028], [0.3, 0.0022], [0.375, 0.0015
 export function sewerMinSlope(diameter, gravityRel) {
   let s = SLOPE_TABLE[0][1];
   for (const [d, sl] of SLOPE_TABLE) if (diameter >= d - 1e-9) s = sl;
-  if (diameter > 0.9) s = 0.00046 * Math.pow(0.9 / diameter, 1.2);
+  if (diameter > 0.9) s = 0.00046 * DM.pow(0.9 / diameter, 1.2);
   return s / gravityRel; // self-cleansing velocity criterion: v = √(8 g R S / f) → S ∝ 1/g
 }
 // Manning full-flow capacity, with n rescaled by √(g₀/g) so the velocity criterion carries over
 function sewerCapacity(D, slope, gravityRel) {
   const A = Math.PI * D * D / 4, R = D / 4;
-  return SEWER.fullness * A * (1 / SEWER.manningN) * Math.pow(R, 2 / 3) * Math.sqrt(slope) * Math.sqrt(gravityRel);
+  return SEWER.fullness * A * (1 / SEWER.manningN) * DM.pow(R, 2 / 3) * Math.sqrt(slope) * Math.sqrt(gravityRel);
 }
 // Harmon peaking factor (P in thousands)
 const harmon = (pop) => 1 + 14 / (4 + Math.sqrt(Math.max(pop, 1) / 1000));
@@ -181,7 +182,7 @@ export function buildStreetGraph(layout) {
     edges.push(e);
   };
   for (const e of raw) {
-    const A = plan(nodes[e.a].pos), B = plan(nodes[e.b].pos), ab = sub(B, A), L2 = ab[0] ** 2 + ab[1] ** 2 + ab[2] ** 2;
+    const A = plan(nodes[e.a].pos), B = plan(nodes[e.b].pos), ab = sub(B, A), L2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
     const mid = scale3(add(A, B), 0.5), splits = [];
     for (const [ni] of hash.near(mid, Math.sqrt(L2) / 2 + 0.5, 1)) {
       if (ni === e.a || ni === e.b) continue;
@@ -733,14 +734,14 @@ export function buildInfrastructure(layout) {
     // depth: below every foundation whose footprint reaches the corridor, searched along the whole segment
     const bCell = 80, bHash = new PointHash(bCell);
     let maxHalfDiag = 0;
-    layout.buildings.forEach((b, i) => { bHash.add(b.pos, i); maxHalfDiag = Math.max(maxHalfDiag, Math.hypot(b.w, b.d) / 2); });
+    layout.buildings.forEach((b, i) => { bHash.add(b.pos, i); maxHalfDiag = Math.max(maxHalfDiag, DM.hypot(b.w, b.d) / 2); });
     const reach = TRANSIT.corridor + maxHalfDiag;
     const rings = Math.ceil(reach / bCell) + 1;
     let depth = TRANSIT.minDepth;
     const tunnels = [];
     for (const [ei, t] of edgesUsed) {
       const e = graph.edges[ei], A = graph.nodes[t.a].pos, B = graph.nodes[t.b].pos;
-      const ab = sub(B, A), L2 = ab[0] ** 2 + ab[1] ** 2 + ab[2] ** 2 || 1;
+      const ab = sub(B, A), L2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2] || 1;
       const seenB = new Set(), near = [];
       const steps = Math.max(1, Math.ceil(e.len / bCell));
       for (let k = 0; k <= steps; k++) {
@@ -748,7 +749,7 @@ export function buildInfrastructure(layout) {
         for (const [bi] of bHash.near(S, bCell + reach, rings)) {
           if (seenB.has(bi)) continue; seenB.add(bi);
           const b = layout.buildings[bi], ap = sub(b.pos, A), tt = clamp((ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / L2, 0, 1);
-          if (len3(sub(ap, scale3(ab, tt))) <= TRANSIT.corridor + Math.hypot(b.w, b.d) / 2) near.push(bi);
+          if (len3(sub(ap, scale3(ab, tt))) <= TRANSIT.corridor + DM.hypot(b.w, b.d) / 2) near.push(bi);
         }
       }
       let need = TRANSIT.minDepth;
@@ -782,7 +783,7 @@ export function buildInfrastructure(layout) {
   const trench = sewer.pipes.reduce((s, p) => s + p.length * (p.diameter + 0.6) * (p.upDepth + p.downDepth) / 2, 0)
     + water.mains.reduce((s, m) => s + m.length * ((m.barrels ?? 1) * m.diameter + 0.6) * m.depth, 0)
     + power.feeders.reduce((s, f) => s + f.length * 0.6 * f.depth, 0)
-    + transit.tunnels.reduce((s, t) => s + t.length * Math.PI * (t.diameter / 2) ** 2, 0)
+    + transit.tunnels.reduce((s, t) => s + t.length * Math.PI * DM.pow(t.diameter / 2, 2), 0)
     + utilidors.reduce((s, u) => s + u.length * u.width * u.height, 0);
   const stats = {
     nodes: N, edges: graph.edges.length, connectors: graph.connectors,

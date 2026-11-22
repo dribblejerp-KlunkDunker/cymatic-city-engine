@@ -7,6 +7,7 @@
 // Sources in docs/research-notes/people_traffic.md.
 import { mulberry32 } from './cymatic-engine.js';
 import { dijkstra } from './infrastructure.js';
+import { DM } from './detmath.js';
 
 export const TRAFFIC = {
   laneCapacity: 1800,      // veh/h per lane (HCM basic capacity for urban arterials with signals ≈ 1,800–1,900)
@@ -26,14 +27,14 @@ export const TRAFFIC = {
 
 // The land-value formula on its own, so it can be checked: monotone in each of its three inputs.
 export function landValueOf(access, amp, metroNear) {
-  return LAND.accessWeight * Math.pow(Math.max(0, access), 0.7) + LAND.ampWeight * amp + LAND.metroWeight * metroNear;
+  return LAND.accessWeight * DM.pow(Math.max(0, access), 0.7) + LAND.ampWeight * amp + LAND.metroWeight * metroNear;
 }
 export const LAND = {
   accessWeight: 0.6, ampWeight: 0.25, metroWeight: 0.15, // land-value index = weighted mix, normalised to its max
   coreShare: 0.15, mixedShare: 0.35,                     // emergent zoning: top 15 % of value is core, next 35 % mixed
 };
 
-const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+const dist = (a, b) => DM.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 
 // Street capacity and free-flow time per edge.
@@ -49,7 +50,7 @@ export function freeFlowMinutes(edge) {
 }
 export function bprMinutes(edge, flow) {
   const vc = flow / edgeCapacity(edge);
-  return freeFlowMinutes(edge) * (1 + TRAFFIC.bprAlpha * Math.pow(vc, TRAFFIC.bprBeta));
+  return freeFlowMinutes(edge) * (1 + TRAFFIC.bprAlpha * DM.pow(vc, TRAFFIC.bprBeta));
 }
 
 // Weighted sample without replacement (deterministic for a seed): returns indices.
@@ -145,11 +146,11 @@ export function people(layout, infra, opts = {}) {
       for (const v of order) if (parent[v] >= 0) dKm[v] = dKm[parent[v]] + graph.edges[pedge[v]].len / 1000; // parents settle first
       // Hansen accessibility to jobs on network distance
       let acc = 0;
-      for (const j of jobNodes) if (Number.isFinite(tMin[j])) acc += jobsAt[j] * Math.exp(-dKm[j] / TRAFFIC.decayKm);
+      for (const j of jobNodes) if (Number.isFinite(tMin[j])) acc += jobsAt[j] * DM.exp(-dKm[j] / TRAFFIC.decayKm);
       access[o] = acc;
       // destinations: gravity weights; the sample is drawn once (first pass) and kept, so later passes change only
       // the routes and the averaging is over routes, not over different draws
-      const w = jobNodes.map((j) => (Number.isFinite(tMin[j]) ? jobsAt[j] * Math.exp(-dKm[j] / TRAFFIC.decayKm) : 0));
+      const w = jobNodes.map((j) => (Number.isFinite(tMin[j]) ? jobsAt[j] * DM.exp(-dKm[j] / TRAFFIC.decayKm) : 0));
       if (!destPicks[k]) destPicks[k] = weightedSample(w, Math.min(48, jobNodes.length), rng);
       const picks = destPicks[k];
       const wsum = picks.reduce((s, p) => s + w[p], 0);
@@ -160,13 +161,13 @@ export function people(layout, infra, opts = {}) {
         if (!(T > 0)) continue;
         byOriginSum += T;
         const km = dKm[j], carMin = tMin[j] + TRAFFIC.carFixedMin;
-        const pWalk = 1 / (1 + Math.exp((km - TRAFFIC.walkHalfKm) / TRAFFIC.walkSlopeKm));
+        const pWalk = 1 / (1 + DM.exp((km - TRAFFIC.walkHalfKm) / TRAFFIC.walkSlopeKm));
         let pMetro = 0, metroMin = Infinity;
         if (metro && metro.nearest[o] >= 0 && metro.nearest[j] >= 0 && metro.nearest[o] !== metro.nearest[j]) {
           const tunnel = metro.D[metro.nearest[o]][metro.nearest[j]];
           if (Number.isFinite(tunnel)) {
             metroMin = ((metro.walk[o] + metro.walk[j]) / 1000 / TRAFFIC.walkSpeedKmh) * 60 + TRAFFIC.metroWaitMin + (tunnel / 1000 / TRAFFIC.metroSpeedKmh) * 60;
-            pMetro = (1 - pWalk) / (1 + Math.exp(TRAFFIC.logitPerMin * (metroMin - carMin)));
+            pMetro = (1 - pWalk) / (1 + DM.exp(TRAFFIC.logitPerMin * (metroMin - carMin)));
           }
         }
         const pCar = 1 - pWalk - pMetro;

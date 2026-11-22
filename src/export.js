@@ -3,14 +3,15 @@
 // city-model tools. Pure functions of a layout: no dependencies, no I/O, worker-safe, and deterministic (the
 // same layout and options give the same bytes).
 import { ENGINE_VERSION, buildingMesh, PRESETS } from './cymatic-engine.js';
-import { underground } from './infrastructure.js';
+import { underground, foundationDepth } from './infrastructure.js';
+import { DM } from './detmath.js';
 
 // the viewer's colours, so an exported city looks like the one on the page
 export const EXPORT_COLORS = {
   zone: { core: '#ffb347', mixed: '#d9c27a', residential: '#7fa6b8', green: '#4d8a4a' },
   era: ['#e3905f', '#63a9be', '#b7d36b'],
   road: { boulevard: '#efe2c2', ring: '#b9ac8d', spoke: '#8c8574', wall: '#d3a658' },
-  tree: '#4f7a4a', ground: '#3a3830', water: '#3fa7e0',
+  tree: '#4f7a4a', ground: '#3a3830', water: '#3fa7e0', foundation: '#6f6a60',
   network: { sewer_pipes: '#a8864a', water_mains: '#3fa7e0', power_feeders: '#f2c14e', power_transmission: '#ef6a4a', transit_tunnels: '#9fb6c8', utility_tunnels: '#d7cbb0' },
 };
 
@@ -20,9 +21,9 @@ const add3 = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const mul3 = (a, k) => [a[0] * k, a[1] * k, a[2] * k];
 const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-const len3 = (a) => Math.hypot(a[0], a[1], a[2]);
+const len3 = (a) => DM.hypot(a[0], a[1], a[2]);
 const unit3 = (a) => { const l = len3(a); return l > 0 ? [a[0] / l, a[1] / l, a[2] / l] : [0, 0, 0]; };
-const round = (x, digits) => { const k = 10 ** digits, r = Math.round(x * k) / k; return r === 0 ? 0 : r; }; // never -0
+const round = (x, digits) => { const k = DM.pow(10, digits), r = Math.round(x * k) / k; return r === 0 ? 0 : r; }; // never -0
 const isSphere = (layout) => layout.meta.plate === 'sphere';
 // Newell's method: the normal of a planar polygon, facing the side its vertices run counter-clockwise on
 function polygonNormal(pts) {
@@ -42,8 +43,8 @@ function quatOfBasis(X, Y, Z) {
   else if (m00 > m11 && m00 > m22) { const s = 2 * Math.sqrt(1 + m00 - m11 - m22); q = [s / 4, (m01 + m10) / s, (m02 + m20) / s, (m21 - m12) / s]; }
   else if (m11 > m22) { const s = 2 * Math.sqrt(1 + m11 - m00 - m22); q = [(m01 + m10) / s, s / 4, (m12 + m21) / s, (m02 - m20) / s]; }
   else { const s = 2 * Math.sqrt(1 + m22 - m00 - m11); q = [(m02 + m20) / s, (m12 + m21) / s, s / 4, (m10 - m01) / s]; }
-  const l = Math.hypot(q[0], q[1], q[2], q[3]), sign = q[3] < 0 ? -1 : 1; // one of the two equal quaternions: w ≥ 0
-  return q.map((v) => round((sign * v) / l, 6));
+  const l = DM.hypot(q[0], q[1], q[2], q[3]), sign = q[3] < 0 ? -1 : 1; // one of the two equal quaternions: w ≥ 0
+  return q.map((v) => round((sign * v) / l, 9));
 }
 // the building's own frame, exactly as buildingMesh builds it
 const frameOf = (b) => ({ X: b.fwd, Y: b.up, Z: unit3(cross3(b.fwd, b.up)) });
@@ -54,14 +55,14 @@ function frameOfUp(up) {
   return { X, Y: up, Z: unit3(cross3(X, up)) };
 }
 const isIdentity = (q) => q[0] === 0 && q[1] === 0 && q[2] === 0 && q[3] === 1;
-const hexToLinear = (hex) => [1, 3, 5].map((i) => { const c = parseInt(hex.slice(i, i + 2), 16) / 255; return round(c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4, 4); });
+const hexToLinear = (hex) => [1, 3, 5].map((i) => { const c = parseInt(hex.slice(i, i + 2), 16) / 255; return round(c <= 0.04045 ? c / 12.92 : DM.pow((c + 0.055) / 1.055, 2.4), 4); });
 const describe = (meta) => (meta.chord && meta.chord.length > 1 ? `chord ${meta.chord.map((v) => v.hz).join(' + ')} Hz` : `${meta.frequency} Hz`);
 // the inputs that identify the city, for the files' own records
 function identityOf(layout, extra = {}) {
   const m = layout.meta, id = { engine: ENGINE_VERSION };
   if (m.chord && m.chord.length > 1) id.chord = m.chord.map((v) => ({ hz: v.hz, weight: v.weight })); else id.frequency = m.frequency;
   Object.assign(id, { plate: m.plate, preset: m.preset, seed: m.seed, Q: m.Q });
-  if (m.year !== undefined) id.year = m.year;
+  if (m.year !== undefined) { id.year = m.year; if (m.horizon !== undefined) id.horizon = m.horizon; }
   for (const [k, v] of Object.entries(extra)) if (v !== undefined && v !== null) id[k] = v;
   return id;
 }
@@ -87,7 +88,7 @@ export function unitBuildingMesh(shape) {
 // the viewer's tree: a five-sided cone, one unit across and 1.8 tall
 function unitTreeMesh() {
   const n = 5, verts = [];
-  for (let i = 0; i < n; i++) { const t = (2 * Math.PI * i) / n; verts.push([0.5 * Math.cos(t), 0, 0.5 * Math.sin(t)]); }
+  for (let i = 0; i < n; i++) { const t = (2 * Math.PI * i) / n; verts.push([0.5 * DM.cos(t), 0, 0.5 * DM.sin(t)]); }
   verts.push([0, 1.8, 0]);
   const faces = [];
   for (let i = 0; i < n; i++) faces.push([n, (i + 1) % n, i]); // sides, facing out
@@ -107,7 +108,7 @@ function plateOutline(meta, y = 0) {
   const E = meta.world.extent;
   if (meta.world.shape === 'square') return [[-E, y, E], [E, y, E], [E, y, -E], [-E, y, -E]];
   const n = 96, pts = [];
-  for (let i = 0; i < n; i++) { const t = (2 * Math.PI * i) / n; pts.push([E * Math.cos(t), y, -E * Math.sin(t)]); }
+  for (let i = 0; i < n; i++) { const t = (2 * Math.PI * i) / n; pts.push([E * DM.cos(t), y, -E * DM.sin(t)]); }
   return pts;
 }
 const treeSize = (meta) => 0.22 * (meta.presetSpec?.lot ?? PRESETS[meta.base ?? meta.preset]?.lot ?? 30);
@@ -186,12 +187,14 @@ function buildGltf(layout, opts = {}) {
   if (opts.infra) needInfra(layout, 'glTF');
   const W = gltfWriter(), { doc } = W, meta = layout.meta, C = EXPORT_COLORS;
   const instanced = !!opts.instanced, withTrees = opts.trees !== false;
-  const root = W.node({ name: 'city', children: [], extras: identityOf(layout, { horizon: opts.horizon, paint }) });
+  // a ground with relief is written when the terrain has relief and a sampler was given (flat plates only)
+  const reliefGround = !isSphere(layout) && (meta.terrain?.mode ?? 'flat') !== 'flat' && typeof opts.elevation === 'function';
+  const root = W.node({ name: 'city', children: [], extras: identityOf(layout, { paint }) });
   const group = (name) => { const i = W.node({ name, children: [] }); doc.nodes[root].children.push(i); return doc.nodes[i]; };
   const trs = (pos, q, scale) => {
-    const n = { translation: pos.map((v) => round(v, 3)) };
+    const n = { translation: pos.map((v) => round(v, 4)) };
     if (!isIdentity(q)) n.rotation = q;
-    n.scale = scale.map((v) => round(v, 3));
+    n.scale = scale.map((v) => round(v, 4));
     return n;
   };
   // instances of one mesh as EXT_mesh_gpu_instancing attributes
@@ -216,6 +219,22 @@ function buildGltf(layout, opts = {}) {
       g.children.push(W.node({ name: `b${id}`, mesh: meshOf.get(key), ...t, extras }));
     });
     if (instanced) for (const [key, list] of byMesh) g.children.push(W.node(instances(`buildings:${key.replace('|', ':')}`, meshOf.get(key), list)));
+
+    // Foundations: on sloping ground a level floor leaves a gap on the downhill side, so each building's
+    // footprint continues below grade to its foundation depth. It is the building's own prism turned downward:
+    // the same unit mesh (four or eight sides), placed one depth below the floor.
+    if (opts.foundations ?? reliefGround) {
+      const f = group('foundations'), mat = W.material('foundation', C.foundation), fMesh = new Map(), fList = new Map();
+      layout.buildings.forEach((b, i) => {
+        const shape = b.shape === 'pod' || b.shape === 'dome' || b.shape === 'spire' ? 'pod' : 'block', depth = foundationDepth(b);
+        if (!shapeGeometry.has(shape)) shapeGeometry.set(shape, W.geometry(unitBuildingMesh(shape)));
+        if (!fMesh.has(shape)) fMesh.set(shape, W.mesh(`foundation:${shape}`, { ...shapeGeometry.get(shape), material: mat }));
+        const { X, Y, Z } = frameOf(b), t = trs(sub3(b.pos, mul3(b.up, depth)), quatOfBasis(X, Y, Z), [b.w, depth, b.d]);
+        if (instanced) (fList.get(shape) ?? fList.set(shape, []).get(shape)).push(t);
+        else f.children.push(W.node({ name: `f${b.source ?? i}`, mesh: fMesh.get(shape), ...t }));
+      });
+      if (instanced) for (const [shape, list] of fList) f.children.push(W.node(instances(`foundations:${shape}`, fMesh.get(shape), list)));
+    }
   }
 
   // roads: one mesh per kind
@@ -246,7 +265,7 @@ function buildGltf(layout, opts = {}) {
     const fan = (pts) => { const m = { positions: [], normals: [], indices: [] }; pts.forEach((p) => { m.positions.push(p[0], p[1], p[2]); m.normals.push(0, 1, 0); }); for (let k = 1; k + 1 < pts.length; k++) m.indices.push(0, k, k + 1); return m; };
     let ground = null;
     if (flat) ground = fan(plateOutline(meta, 0));
-    else if (typeof opts.elevation === 'function') ground = groundGrid(meta, opts.elevation, opts.groundGrid ?? 128);
+    else if (typeof opts.elevation === 'function') ground = groundGrid(meta, opts.elevation, opts.groundGrid ?? defaultGroundGrid(meta));
     if (ground) group('ground').mesh = W.mesh('ground', { ...W.geometry(ground), material: W.material('ground', C.ground) });
     const wl = meta.terrain?.waterLevel;
     if (!flat && ground && typeof wl === 'number' && Number.isFinite(wl)) group('water').mesh = W.mesh('water', { ...W.geometry(fan(plateOutline(meta, wl))), material: W.material('water', C.water, { alpha: 0.75 }) });
@@ -272,6 +291,9 @@ function buildGltf(layout, opts = {}) {
   return { doc, bin: W.finish() };
 }
 
+// Cells of about ten metres, so the mesh stays within centimetres of the field buildings stand on; capped at
+// 384 a side (a 6 km city then has 16 m cells).
+const defaultGroundGrid = (meta) => Math.max(64, Math.min(384, Math.ceil((2 * meta.world.extent) / 10)));
 // A grid of the ground over the plate, y from the sampler elevation(x, z). On a circular plate the cells
 // outside the rim are dropped and the vertices just outside it are pulled onto the rim.
 function groundGrid(meta, elevation, N) {
@@ -279,7 +301,7 @@ function groundGrid(meta, elevation, N) {
   const E = meta.world.extent, circle = meta.world.shape !== 'square', W = N + 1;
   const xs = new Float64Array(W * W), zs = new Float64Array(W * W), inside = new Uint8Array(W * W);
   for (let j = 0; j < W; j++) for (let i = 0; i < W; i++) {
-    let x = -E + (2 * E * i) / N, z = -E + (2 * E * j) / N; const id = j * W + i, r = Math.hypot(x, z);
+    let x = -E + (2 * E * i) / N, z = -E + (2 * E * j) / N; const id = j * W + i, r = DM.hypot(x, z);
     inside[id] = !circle || r <= E ? 1 : 0;
     if (!inside[id]) { x *= E / r; z *= E / r; }
     xs[id] = x; zs[id] = z;
@@ -344,17 +366,17 @@ export function geoProjector(origin, bearing = 0) {
   if (Math.abs(lon0) > 180) throw new Error(`GeoJSON: origin longitude ${lon0} is outside ±180°`);
   if (typeof bearing !== 'number' || !Number.isFinite(bearing)) throw new Error('GeoJSON: bearing must be a number of degrees');
   const { a, f } = WGS84, e2 = f * (2 - f), rad = Math.PI / 180;
-  const sp = Math.sin(lat0 * rad), cp = Math.cos(lat0 * rad), sl = Math.sin(lon0 * rad), cl = Math.cos(lon0 * rad);
+  const sp = DM.sin(lat0 * rad), cp = DM.cos(lat0 * rad), sl = DM.sin(lon0 * rad), cl = DM.cos(lon0 * rad);
   const N0 = a / Math.sqrt(1 - e2 * sp * sp), X0 = N0 * cp * cl, Y0 = N0 * cp * sl, Z0 = N0 * (1 - e2) * sp;
-  const cb = Math.cos(bearing * rad), sb = Math.sin(bearing * rad);
+  const cb = DM.cos(bearing * rad), sb = DM.sin(bearing * rad);
   return (x, z) => {
     const e0 = x, n0 = -z, e = e0 * cb + n0 * sb, n = -e0 * sb + n0 * cb;
     const X = X0 - sl * e - sp * cl * n, Y = Y0 + cl * e - sp * sl * n, Z = Z0 + cp * n;
-    const p = Math.hypot(X, Y), lon = Math.atan2(Y, X) / rad;
-    let lat = Math.atan2(Z, p * (1 - e2));
+    const p = DM.hypot(X, Y), lon = DM.atan2(Y, X) / rad;
+    let lat = DM.atan2(Z, p * (1 - e2));
     for (let i = 0; i < 12; i++) { // fixed-point iteration; converges to machine precision in a few rounds
-      const s = Math.sin(lat), N = a / Math.sqrt(1 - e2 * s * s), h = p / Math.cos(lat) - N;
-      const next = Math.atan2(Z, p * (1 - (e2 * N) / (N + h)));
+      const s = DM.sin(lat), N = a / Math.sqrt(1 - e2 * s * s), h = p / DM.cos(lat) - N;
+      const next = DM.atan2(Z, p * (1 - (e2 * N) / (N + h)));
       if (Math.abs(next - lat) < 1e-15) { lat = next; break; }
       lat = next;
     }
@@ -369,14 +391,18 @@ export function toGeoJSON(layout, opts = {}) {
   if (opts.infra) needInfra(layout, 'GeoJSON');
   const bearing = opts.bearing ?? 0, project = geoProjector(opts.origin, bearing);
   const bbox = [Infinity, Infinity, -Infinity, -Infinity];
-  const pos = (P) => {
-    const [lon, lat] = project(P[0], P[2]), c = [round(lon, 7), round(lat, 7)];
-    if (c[0] < bbox[0]) bbox[0] = c[0]; if (c[1] < bbox[1]) bbox[1] = c[1]; if (c[0] > bbox[2]) bbox[2] = c[0]; if (c[1] > bbox[3]) bbox[3] = c[1];
-    return c;
-  };
+  const grow = (c) => { if (c[0] < bbox[0]) bbox[0] = c[0]; if (c[1] < bbox[1]) bbox[1] = c[1]; if (c[0] > bbox[2]) bbox[2] = c[0]; if (c[1] > bbox[3]) bbox[3] = c[1]; };
+  const pos = (P) => { const [lon, lat] = project(P[0], P[2]); return [round(lon, 7), round(lat, 7)]; };
   const r3 = (v) => (typeof v === 'number' ? round(v, 3) : v);
   const features = [];
-  const feature = (id, kind, geometry, properties) => features.push({ type: 'Feature', id, geometry, properties: { kind, ...properties } });
+  const feature = (id, kind, geometry, properties) => {
+    const g = geometry, all = g.type === 'Point' ? [g.coordinates] : g.type === 'LineString' ? g.coordinates : g.coordinates[0];
+    all.forEach(grow);
+    features.push({ type: 'Feature', id, geometry, properties: { kind, ...properties } });
+  };
+  // A line needs two different positions (RFC 7946, and every GIS reader): a street-graph edge shorter than the
+  // seven-decimal grid, about a centimetre, would collapse to one, so it is left out. Ids keep their numbers.
+  const line = (id, kind, A, B, properties) => { if (A[0] !== B[0] || A[1] !== B[1]) feature(id, kind, { type: 'LineString', coordinates: [A, B] }, properties); };
   const elevationOf = (P) => r3(P[1]);
 
   layout.buildings.forEach((b, i) => {
@@ -389,13 +415,13 @@ export function toGeoJSON(layout, opts = {}) {
     if (b.built !== undefined) { props.built = b.built; props.rebuilt = b.rebuilt; }
     feature(`b${id}`, 'building', { type: 'Polygon', coordinates: [ring] }, props);
   });
-  layout.roads.forEach((r, i) => feature(`r${i}`, 'road', { type: 'LineString', coordinates: [pos(r.a), pos(r.b)] }, { roadKind: r.kind, width: r3(r.w), era: r.era ?? 0, bridge: !!r.bridge }));
+  layout.roads.forEach((r, i) => line(`r${i}`, 'road', pos(r.a), pos(r.b), { roadKind: r.kind, width: r3(r.w), era: r.era ?? 0, bridge: !!r.bridge }));
   layout.trees.forEach((t, i) => feature(`t${i}`, 'tree', { type: 'Point', coordinates: pos(t.pos) }, {}));
 
   if (opts.infra) {
     const I = layout.infra, nodes = I.graph.nodes, at = (i) => pos(nodes[i].pos);
     const points = (prefix, kind, list, props) => (list ?? []).forEach((o, i) => feature(`${prefix}${i}`, kind, { type: 'Point', coordinates: pos(o.pos) }, Object.fromEntries(Object.entries(props(o)).map(([k, v]) => [k, r3(v)]))));
-    const lines = (prefix, kind, list, ends, props) => (list ?? []).forEach((o, i) => feature(`${prefix}${i}`, kind, { type: 'LineString', coordinates: ends(o).map(at) }, Object.fromEntries(Object.entries(props(o)).map(([k, v]) => [k, r3(v)]))));
+    const lines = (prefix, kind, list, ends, props) => (list ?? []).forEach((o, i) => { const [A, B] = ends(o).map(at); line(`${prefix}${i}`, kind, A, B, Object.fromEntries(Object.entries(props(o)).map(([k, v]) => [k, r3(v)]))); });
     points('station', 'metroStation', I.transit.stations, (o) => ({ name: o.name, district: o.district, depth: o.depth }));
     points('substation', 'substation', I.power.substations, (o) => ({ ratingMVA: o.ratingMVA, loadMVA: o.loadMVA, kV: o.kV }));
     points('powerplant', 'powerPlant', I.power.plants, (o) => ({ capacityMW: o.capacityMW }));
@@ -410,7 +436,7 @@ export function toGeoJSON(layout, opts = {}) {
     lines('tunnel', 'metroTunnel', I.transit.tunnels, (o) => [o.a, o.b], (o) => ({ depth: o.depth, diameter: o.diameter, line: o.line }));
     lines('utilidor', 'utilityTunnel', I.utilidors, (o) => [o.a, o.b], (o) => ({ depth: o.depth }));
   }
-  const doc = { type: 'FeatureCollection', cymatic: identityOf(layout, { horizon: opts.horizon, origin: opts.origin, bearing }) };
+  const doc = { type: 'FeatureCollection', cymatic: identityOf(layout, { origin: opts.origin, bearing }) };
   if (features.length) doc.bbox = bbox;
   doc.features = features;
   return JSON.stringify(doc);
@@ -466,7 +492,7 @@ export function toCityJSON(layout, opts = {}) {
     CityObjects[`road-${g.kind}-era${g.era}`] = { type: 'Road', attributes: { roadKind: g.kind, era: g.era, lengthM: round(g.length, 1) },
       geometry: [{ type: 'MultiSurface', lod: '1', boundaries: surfaces, semantics: { surfaces: [{ type: 'TrafficArea' }], values: surfaces.map(() => 0) } }] };
   }
-  const year = meta.year !== undefined ? ` · year ${meta.year}${opts.horizon !== undefined ? ` of ${opts.horizon}` : ''}` : '';
+  const year = meta.year !== undefined ? ` · year ${meta.year}${meta.horizon !== undefined ? ` of ${meta.horizon}` : ''}` : '';
   const doc = {
     type: 'CityJSON', version: '2.0',
     transform: { scale: [SCALE, SCALE, SCALE], translate },

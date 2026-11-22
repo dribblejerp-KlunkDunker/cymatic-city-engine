@@ -6,7 +6,11 @@ const viewer = readFileSync(new URL('./src/viewer.html', import.meta.url), 'utf8
 if (/<\/script/i.test(engine + infra + readFileSync(new URL('./src/simulation.js', import.meta.url), 'utf8') + readFileSync(new URL('./src/people.js', import.meta.url), 'utf8'))) throw new Error('sources must not contain a closing script tag');
 // The infrastructure module shares helper names with the engine, so it is wrapped in its own scope.
 const INFRA_EXPORTS = ['buildInfrastructure', 'buildStreetGraph', 'infraToOBJ', 'underground', 'foundationDepth', 'sewerMinSlope', 'dijkstra', 'SEWER', 'WATER', 'POWER', 'TRANSIT', 'UTILIDOR'];
-const combined = engine.replace(/^export /gm, '') + '\n' +
+// Deterministic math comes first: every stage calls DM.sin, DM.exp … so the page and Node agree to the bit.
+const detmath = readFileSync(new URL('./src/detmath.js', import.meta.url), 'utf8');
+if (/<\/script/i.test(detmath)) throw new Error('sources must not contain a closing script tag');
+const combined = `const { DM } = (() => {\n${detmath.replace(/^export /gm, '')}\nreturn { DM };\n})();\n` +
+  engine.replace(/^import .*$/gm, '').replace(/^export /gm, '') + '\n' +
   `const { ${INFRA_EXPORTS.join(', ')} } = (() => {\n` +
   infra.replace(/^import .*$/gm, '').replace(/^export /gm, '') +
   `\nreturn { ${INFRA_EXPORTS.join(', ')} };\n})();\n`;

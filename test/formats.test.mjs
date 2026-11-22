@@ -96,7 +96,7 @@ test('glTF validates: 0 errors and 0 warnings for flat, terrain with ground, cho
   assert.deepEqual(await validate(new TextEncoder().encode(json), { 'town.bin': bin }), { errors: 0, warnings: 0, messages: [] }, '.gltf + .bin');
 });
 
-test('glTF is faithful: each building node, applied to its unit mesh, is buildingMesh vertex for vertex within 1 mm', () => {
+test('glTF is faithful: each building node, applied to its unit mesh, is buildingMesh vertex for vertex within 0.2 mm', () => {
   for (const o of [TOWN, { ...TOWN, terrain: 'valleys' }, { ...TOWN, plate: 'sphere' }, { frequency: 300, preset: 'alien', seed: 3 }]) {
     const L = city(o), { doc, bin } = parseGLB(toGLB(L));
     const nodes = child(doc, 'buildings').children.map((i) => doc.nodes[i]);
@@ -110,7 +110,7 @@ test('glTF is faithful: each building node, applied to its unit mesh, is buildin
       assert.equal(doc.meshes[n.mesh].name, `building:${b.shape}:zone:${b.zone}`);
       seenShapes.add(b.shape);
       const got = unit.get(n.mesh).map((p) => placed(n, p)), want = buildingMesh(b).verts;
-      assert.ok(sameSet(got, want, 1e-3), `${JSON.stringify(o)} building ${i} (${b.shape})`);
+      assert.ok(sameSet(got, want, 2e-4), `${JSON.stringify(o)} building ${i} (${b.shape})`); // on the sphere too, 2 km from the origin
       assert.deepEqual(n.extras, { index: i, district: b.district, zone: b.zone, floors: b.floors, era: b.era ?? 0, landmark: !!b.landmark, amp: Math.round(b.amp * 1e4) / 1e4 });
     });
     // one mesh per (shape, material) in use, all sharing the shape's geometry
@@ -202,9 +202,55 @@ test('glTF --instanced: EXT_mesh_gpu_instancing with three equal-length instance
   assert.equal(doc.accessors[trees[0].extensions.EXT_mesh_gpu_instancing.attributes.TRANSLATION].count, L.trees.length);
 });
 
-test('glTF ground: follows the sampler inside the plate, buildings stand on it, water lies at the water level', () => {
+test('glTF ground: follows the sampler inside the plate, buildings stand on it down to their foundations, water lies at the water level', () => {
   const relief = { ...TOWN, terrain: 'relief' }, L = city(relief), el = sampler(relief), E = L.meta.world.extent;
   for (const b of L.buildings) assert.ok(Math.abs(b.pos[1] - el(b.pos[0], b.pos[2])) <= 0.01, 'a building base is on the sampled ground');
+  // …and on the exported mesh: at the default grid (cells of about ten metres) the triangle under each
+  // building's centre passes within 10 cm of its floor
+  {
+    const D = parseGLB(toGLB(L, { elevation: el })), prim0 = D.doc.meshes[child(D.doc, 'ground').mesh].primitives[0];
+    const P0 = triples(read(D.doc, D.bin, prim0.attributes.POSITION)), I0 = read(D.doc, D.bin, prim0.indices), cell = (2 * E) / 48, bucket = new Map();
+    for (let t = 0; t < I0.length; t += 3) {
+      const tri = [P0[I0[t]], P0[I0[t + 1]], P0[I0[t + 2]]], xs = tri.map((p) => p[0]), zs = tri.map((p) => p[2]);
+      for (let i = Math.floor((Math.min(...xs) + E) / cell); i <= Math.floor((Math.max(...xs) + E) / cell); i++) for (let j = Math.floor((Math.min(...zs) + E) / cell); j <= Math.floor((Math.max(...zs) + E) / cell); j++) { const k = `${i},${j}`; if (!bucket.has(k)) bucket.set(k, []); bucket.get(k).push(tri); }
+    }
+    const meshHeight = (x, z) => {
+      for (const [a, b, c] of bucket.get(`${Math.floor((x + E) / cell)},${Math.floor((z + E) / cell)}`) ?? []) {
+        const d = (b[2] - c[2]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[2] - c[2]), u = ((b[2] - c[2]) * (x - c[0]) + (c[0] - b[0]) * (z - c[2])) / d, v = ((c[2] - a[2]) * (x - c[0]) + (a[0] - c[0]) * (z - c[2])) / d, w = 1 - u - v;
+        if (u >= -1e-9 && v >= -1e-9 && w >= -1e-9) return u * a[1] + v * b[1] + w * c[1];
+      }
+      return null;
+    };
+    let worst = 0;
+    for (const b of L.buildings) { const y = meshHeight(b.pos[0], b.pos[2]); assert.notEqual(y, null, 'every building stands over the ground mesh'); worst = Math.max(worst, Math.abs(y - b.pos[1])); }
+    assert.ok(worst <= 0.10, `floors are within 10 cm of the exported ground (worst ${(worst * 100).toFixed(1)} cm)`);
+    assert.ok(P0.length > 13000, 'the default grid follows the plate: about ten-metre cells');
+    // foundations: under every building its own footprint goes down to the foundation depth, below the ground
+    // at every corner, so a level floor on sloping ground leaves no gap
+    const F0 = child(D.doc, 'foundations').children.map((i) => D.doc.nodes[i]), B0 = child(D.doc, 'buildings').children.map((i) => D.doc.nodes[i]);
+    assert.equal(F0.length, L.buildings.length);
+    assert.deepEqual(D.doc.nodes[0].children.map((i) => D.doc.nodes[i].name), ['buildings', 'foundations', 'roads', 'trees', 'ground', 'water']);
+    const unitOf = new Map();
+    F0.forEach((n, i) => {
+      const b = L.buildings[i], depth = Math.min(60, 2 + 0.1 * b.h);
+      assert.equal(n.name, `f${i}`);
+      assert.equal(D.doc.materials[D.doc.meshes[n.mesh].primitives[0].material].name, 'foundation');
+      if (!unitOf.has(n.mesh)) unitOf.set(n.mesh, triples(read(D.doc, D.bin, D.doc.meshes[n.mesh].primitives[0].attributes.POSITION)));
+      const got = unitOf.get(n.mesh).map((p) => placed(n, p)), base = buildingMesh(b).verts.slice(0, buildingMesh(b).verts.length / 2);
+      const want = [...base, ...base.map((p) => [p[0], p[1] - depth, p[2]])]; // the footprint, at the floor and one depth below
+      assert.ok(sameSet(got, want, 2e-4), `foundation ${i}`);
+      for (const p of base) assert.ok(el(p[0], p[2]) > p[1] - depth, `the ground at a corner of building ${i} is above its foundation’s foot`);
+      assert.deepEqual(n.rotation, B0[i].rotation);
+    });
+    assert.equal(unitOf.size <= 2, true, 'two foundation meshes at most: four sides and eight');
+    // none on a flat plate, none without a ground, and they can be asked for or declined
+    assert.equal(child(parseGLB(toGLB(city())).doc, 'foundations'), null);
+    assert.equal(child(parseGLB(toGLB(L)).doc, 'foundations'), null);
+    assert.equal(child(parseGLB(toGLB(L, { elevation: el, foundations: false })).doc, 'foundations'), null);
+    assert.equal(child(parseGLB(toGLB(city(), { foundations: true })).doc, 'foundations').children.length, city().buildings.length);
+    const inst = parseGLB(toGLB(L, { elevation: el, instanced: true })).doc, fi = child(inst, 'foundations').children.map((i) => inst.nodes[i]);
+    assert.equal(fi.reduce((s2, n) => s2 + inst.accessors[n.extensions.EXT_mesh_gpu_instancing.attributes.TRANSLATION].count, 0), L.buildings.length);
+  }
   const { doc, bin } = parseGLB(toGLB(L, { elevation: el, groundGrid: 64 }));
   const ground = child(doc, 'ground'), prim = doc.meshes[ground.mesh].primitives[0];
   const P = triples(read(doc, bin, prim.attributes.POSITION)), I = read(doc, bin, prim.indices), N = triples(read(doc, bin, prim.attributes.NORMAL));
@@ -278,11 +324,11 @@ test('glTF networks: one LINES mesh per network at true depth, under the OBJ nam
 });
 
 test('glTF scene: a city root with named groups, materials in the page’s colours, paint by era, years on the nodes', () => {
-  const L = withInfra(), { doc } = parseGLB(toGLB(L, { infra: true, horizon: 100 }));
+  const L = withInfra(), { doc } = parseGLB(toGLB(L, { infra: true }));
   assert.deepEqual(doc.scenes, [{ name: 'city', nodes: [0] }]);
   assert.equal(doc.nodes[0].name, 'city');
   assert.deepEqual(doc.nodes[0].children.map((i) => doc.nodes[i].name), ['buildings', 'roads', 'trees', 'ground', 'underground']);
-  assert.deepEqual(doc.nodes[0].extras, { engine: ENGINE_VERSION, frequency: 432, plate: 'circle', preset: 'town', seed: 1, Q: 100, horizon: 100, paint: 'zone' });
+  assert.deepEqual(doc.nodes[0].extras, { engine: ENGINE_VERSION, frequency: 432, plate: 'circle', preset: 'town', seed: 1, Q: 100, paint: 'zone' }); // the plan: no year, no horizon
   for (const a of doc.accessors) if (a.type === 'VEC3' && doc.bufferViews[a.bufferView].target === 34962 && a.min) assert.ok(a.min.every((v, k) => v <= a.max[k]));
   const linear = (hex) => [1, 3, 5].map((i) => { const c = parseInt(hex.slice(i, i + 2), 16) / 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; });
   for (const m of doc.materials.filter((m) => m.name.startsWith('zone:'))) {
@@ -296,8 +342,9 @@ test('glTF scene: a city root with named groups, materials in the page’s colou
   assert.equal(byEra.materials.some((m) => m.name.startsWith('zone:')), false);
   child(byEra, 'buildings').children.forEach((i, k) => assert.ok(byEra.meshes[byEra.nodes[i].mesh].name.endsWith(`era:${C.buildings[k].era}`)));
   // a year of growth: nodes are named by the building's number in the full plan and carry their dates
-  const frame = cityAt(city(), { year: 30 }).layout, Y = parseGLB(toGLB(frame, { horizon: 100 })).doc;
+  const frame = cityAt(city(), { year: 30, horizon: 60 }).layout, Y = parseGLB(toGLB(frame)).doc;
   assert.equal(Y.nodes[0].extras.year, 30);
+  assert.equal(Y.nodes[0].extras.horizon, 60, 'the file names the horizon its year is measured in');
   child(Y, 'buildings').children.forEach((i, k) => {
     const n = Y.nodes[i], b = frame.buildings[k];
     assert.equal(n.name, `b${b.source}`);
@@ -351,6 +398,85 @@ test('CLI generate: the extension names the format, longest first; GeoJSON needs
   const hills = tmp('hills.glb');
   cli('generate', ...args, '--terrain', 'relief', '--out', hills);
   assert.ok(child(parseGLB(new Uint8Array(readFileSync(hills))).doc, 'ground'));
+});
+
+test('CLI flags reach the file: --origin and --bearing, --paint, --no-trees, --instanced, and the year with its horizon', () => {
+  const args = ['-f', '432', '--preset', 'town'], bytesOf = (f) => new Uint8Array(readFileSync(f));
+  // a different origin and bearing put the same town somewhere else, exactly where the library puts it
+  const g = tmp('sydney.geojson');
+  cli('generate', ...args, '--out', g, '--origin', '-33.9,151.2', '--bearing', '250');
+  const doc = JSON.parse(readFileSync(g, 'utf8'));
+  assert.deepEqual([doc.cymatic.origin, doc.cymatic.bearing], [[-33.9, 151.2], 250]);
+  assert.ok(doc.bbox[0] > 151.18 && doc.bbox[2] < 151.22 && doc.bbox[1] > -33.92 && doc.bbox[3] < -33.88, `bbox ${doc.bbox}`);
+  assert.equal(readFileSync(g, 'utf8'), toGeoJSON(city(), { origin: [-33.9, 151.2], bearing: 250 }));
+  assert.notEqual(readFileSync(g, 'utf8'), toGeoJSON(city(), { origin: [-33.9, 151.2], bearing: 0 }));
+  // --paint era colours a chord by voice
+  const chordArgs = ['--chord', '432,540', '--preset', 'town'], e = tmp('era.glb');
+  cli('generate', ...chordArgs, '--out', e, '--paint', 'era');
+  assert.deepEqual(bytesOf(e), toGLB(city({ chord: [432, 540], preset: 'town' }), { paint: 'era' }));
+  assert.ok(parseGLB(bytesOf(e)).doc.materials.some((m) => m.name === 'era:1'));
+  assert.equal(parseGLB(bytesOf(e)).doc.nodes[0].extras.paint, 'era');
+  assert.throws(() => cli('generate', ...args, '--out', tmp('p.glb'), '--paint', 'rainbow'), /paint must be/);
+  // --no-trees and --instanced
+  const n = tmp('bare.glb'), i = tmp('inst.glb');
+  cli('generate', ...args, '--out', n, '--no-trees');
+  assert.deepEqual(bytesOf(n), toGLB(city(), { trees: false }));
+  assert.equal(child(parseGLB(bytesOf(n)).doc, 'trees'), null);
+  cli('generate', ...args, '--out', i, '--instanced');
+  assert.deepEqual(bytesOf(i), toGLB(city(), { instanced: true }));
+  // a year of growth: each format names the year and the horizon it is measured in
+  const y = tmp('y.glb'), yg = tmp('y.geojson'), yc = tmp('y.city.json');
+  for (const [f, extra] of [[y, []], [yg, ['--origin', '45,7']], [yc, []]]) cli('generate', ...args, '--year', '30', '--horizon', '60', '--out', f, ...extra);
+  const root = parseGLB(bytesOf(y)).doc.nodes[0].extras;
+  assert.deepEqual([root.year, root.horizon], [30, 60]);
+  const yDoc = JSON.parse(readFileSync(yg, 'utf8')).cymatic;
+  assert.deepEqual([yDoc.year, yDoc.horizon], [30, 60]);
+  assert.match(JSON.parse(readFileSync(yc, 'utf8')).metadata.title, /year 30 of 60$/);
+  const frame = cityAt(city(), { year: 30, horizon: 60 }).layout, { infra: _n, infraToOBJ: _o, ...bare } = frame;
+  assert.deepEqual(bytesOf(y), toGLB(bare)); // no --infra, no networks
+  assert.equal(child(parseGLB(bytesOf(y)).doc, 'underground'), null);
+  assert.equal(readFileSync(yc, 'utf8'), toCityJSON(frame));
+});
+
+test('CLI refuses a flag that would change nothing, naming the format it belongs to', () => {
+  const args = ['-f', '432', '--preset', 'town'];
+  assert.throws(() => cli('generate', ...args, '--out', tmp('a.glb'), '--origin', '45,7'), /--origin applies to GeoJSON only; this file is glTF/);
+  assert.throws(() => cli('generate', ...args, '--out', tmp('a.json'), '--bearing', '30'), /--bearing applies to GeoJSON only; this file is JSON/);
+  assert.throws(() => cli('generate', ...args, '--out', tmp('a.geojson'), '--origin', '45,7', '--paint', 'era'), /--paint applies to glTF only; this file is GeoJSON/);
+  assert.throws(() => cli('generate', ...args, '--out', tmp('a.obj'), '--instanced'), /--instanced applies to glTF only; this file is OBJ/);
+  assert.throws(() => cli('generate', ...args, '--out', tmp('a.city.json'), '--no-trees'), /--no-trees applies to glTF only; this file is CityJSON/);
+  assert.throws(() => cli('summary', ...args, '--out', tmp('a.json')), /--out belongs to generate; summary does not write a file/);
+  assert.throws(() => cli('checks', ...args, '--format', 'glb'), /--format belongs to generate/);
+  assert.throws(() => cli('metrics', ...args, '--instanced'), /--instanced belongs to generate/);
+  // the same flags are welcome where they mean something
+  assert.equal(cli('generate', ...args, '--out', tmp('a.gltf'), '--paint', 'zone', '--no-trees', '--instanced').code, 0);
+  assert.equal(cli('generate', ...args, '--out', tmp('a.geojson'), '--origin', '45,7', '--bearing', '10').code, 0);
+});
+
+test('CLI streams: a profile of - is read from standard input and --out - writes the file to standard output', () => {
+  const stream = (args, input) => { const chunks = [], lines = [], notes = []; const code = run(args, { log: (s2) => lines.push(s2), note: (s2) => notes.push(s2), write: (b) => chunks.push(Buffer.from(b)), stdin: () => input }); return { code, out: Buffer.concat(chunks), lines, notes }; };
+  // binary out: exactly the file, nothing else on standard output, the report beside it
+  const glb = stream(['generate', '-f', '432', '--preset', 'town', '--out', '-', '--format', 'glb']);
+  assert.ok(glb.out.equals(Buffer.from(toGLB(city()))));
+  assert.deepEqual(glb.lines, []);
+  assert.match(glb.notes[0], /^wrote \(standard output\) \([\d,]+ bytes\) · glb · 1,063 buildings$/);
+  // profile in, text out
+  const r = stream(['generate', '-', '--out', '-', '--format', 'cityjson'], JSON.stringify({ ...TOWN, year: 30, horizon: 60 }));
+  assert.equal(r.out.toString('utf8'), toCityJSON(cityAt(city(), { year: 30, horizon: 60 }).layout));
+  // the profile from standard input works with every command
+  assert.equal(JSON.parse(stream(['summary', '-', '--json'], JSON.stringify(TOWN)).lines[0]).stats.buildings, city().buildings.length);
+  assert.throws(() => stream(['summary', '-'], 'not json'), /Profile is not valid JSON/);
+  // standard output needs a named format, and cannot hold a two-file glTF
+  assert.throws(() => stream(['generate', '-f', '432', '--out', '-']), /--out - writes to standard output and needs --format/);
+  assert.throws(() => stream(['generate', '-f', '432', '--preset', 'town', '--out', '-', '--format', 'gltf']), /two files/);
+  // as a real pipe: profile | cymatic generate - --out - --format glb > file
+  const piped = spawnSync(process.execPath, [CLI, 'generate', '-', '--out', '-', '--format', 'glb'], { input: JSON.stringify(TOWN) });
+  assert.equal(piped.status, 0, piped.stderr.toString());
+  assert.ok(piped.stdout.equals(Buffer.from(toGLB(city()))), `${piped.stdout.length} bytes on the pipe`);
+  assert.match(piped.stderr.toString(), /^wrote \(standard output\)/);
+  const jsonReport = spawnSync(process.execPath, [CLI, 'generate', '-', '--out', '-', '--format', 'obj', '--json'], { input: JSON.stringify(TOWN) });
+  assert.equal(JSON.parse(jsonReport.stderr.toString()).format, 'obj');
+  assert.ok(jsonReport.stdout.toString().startsWith('# Cymatic') || jsonReport.stdout.length > 1000);
 });
 
 // ---------------------------------------------------------------- GeoJSON
@@ -418,8 +544,12 @@ test('GeoJSON structure: a FeatureCollection of closed counter-clockwise rings i
   }
   assert.deepEqual(touches, [true, true, true, true], 'the bbox is tight');
   const I = L.infra;
+  // a street shorter than the seven-decimal grid (about a centimetre) collapses to one position and is left out
+  const long = L.roads.filter((r) => Math.hypot(r.b[0] - r.a[0], r.b[2] - r.a[2]) > 0.03).length;
+  assert.ok(count.road >= long && count.road <= L.roads.length && L.roads.length - count.road < 5, `${count.road} of ${L.roads.length} streets`);
+  for (const f of doc.features) if (f.geometry.type === 'LineString') assert.notDeepEqual(f.geometry.coordinates[0], f.geometry.coordinates[1], `${f.id} has two different positions`);
   assert.deepEqual(count, {
-    building: L.buildings.length, road: L.roads.length, tree: L.trees.length,
+    building: L.buildings.length, road: count.road, tree: L.trees.length,
     ...Object.fromEntries(Object.entries({ metroStation: I.transit.stations.length, substation: I.power.substations.length, powerPlant: I.power.plants.length, waterTank: I.water.towers.length, waterPlant: 1, liftStation: I.sewer.liftStations.length, treatmentPlant: I.sewer.plants.length,
       sewerPipe: I.sewer.pipes.length, waterMain: I.water.mains.length, powerFeeder: I.power.feeders.length, powerTransmission: I.power.transmission.length, metroTunnel: I.transit.tunnels.length, utilityTunnel: I.utilidors.length }).filter(([, v]) => v > 0)),
   });
@@ -431,13 +561,32 @@ test('GeoJSON structure: a FeatureCollection of closed counter-clockwise rings i
   const pipe = I.sewer.pipes[0], fp = doc.features.find((f) => f.id === 'sewer0');
   assert.equal(fp.properties.depth, Math.round(pipe.upDepth * 1000) / 1000); assert.equal(fp.properties.diameter, pipe.diameter);
   // without --infra there are no network features; without networks the request is refused
-  assert.equal(JSON.parse(toGeoJSON(L, { origin })).features.length, L.buildings.length + L.roads.length + L.trees.length);
+  assert.equal(JSON.parse(toGeoJSON(L, { origin })).features.length, L.buildings.length + count.road + L.trees.length);
   assert.throws(() => toGeoJSON(generateCity(TOWN), { origin, infra: true }), /networks were asked for/);
   // a year of growth carries its dates
-  const frame = cityAt(city(), { year: 30 }).layout, Y = JSON.parse(toGeoJSON(frame, { origin, horizon: 100 }));
-  assert.equal(Y.cymatic.year, 30); assert.equal(Y.cymatic.horizon, 100);
+  const frame = cityAt(city(), { year: 30, horizon: 60 }).layout, Y = JSON.parse(toGeoJSON(frame, { origin }));
+  assert.equal(Y.cymatic.year, 30); assert.equal(Y.cymatic.horizon, 60);
   const f0 = Y.features[0];
   assert.equal(f0.id, `b${frame.buildings[0].source}`); assert.equal(f0.properties.built, frame.buildings[0].built);
+});
+
+test('GeoJSON leaves out a line that collapses to one position, and the others keep their numbers', () => {
+  const L = city(), a = L.roads[0].a;
+  // three streets: one of no length, one of five centimetres, one ordinary
+  const odd = { ...L, buildings: [], trees: [], roads: [{ ...L.roads[0], b: [...a] }, { ...L.roads[0], b: [a[0] + 0.05, a[1], a[2] + 0.05] }, L.roads[1]] };
+  const doc = JSON.parse(toGeoJSON(odd, { origin: [45.07, 7.69] }));
+  assert.deepEqual(doc.features.map((f) => f.id), ['r1', 'r2']);
+  for (const f of doc.features) assert.notDeepEqual(f.geometry.coordinates[0], f.geometry.coordinates[1]);
+  // the bbox covers what is written, not what was left out
+  const all = doc.features.flatMap((f) => f.geometry.coordinates);
+  assert.deepEqual(doc.bbox, [Math.min(...all.map((c) => c[0])), Math.min(...all.map((c) => c[1])), Math.max(...all.map((c) => c[0])), Math.max(...all.map((c) => c[1]))]);
+  // nothing at all: no bbox, an empty collection
+  const empty = JSON.parse(toGeoJSON({ ...L, buildings: [], trees: [], roads: [] }, { origin: [45.07, 7.69] }));
+  assert.deepEqual([empty.features, empty.bbox], [[], undefined]);
+  // the same rule for network lines
+  const N = withInfra(), mains = N.infra.water.mains, twisted = { ...N, infra: { ...N.infra, water: { ...N.infra.water, mains: [{ ...mains[0], b: mains[0].a }, mains[1]] } } };
+  const net = JSON.parse(toGeoJSON(twisted, { origin: [45.07, 7.69], infra: true })).features.filter((f) => f.properties.kind === 'waterMain');
+  assert.deepEqual(net.map((f) => f.id), ['main1']);
 });
 
 test('GeoJSON keeps the metres: footprints measured back on the ground have the area and place the plan gave them', () => {
@@ -547,7 +696,7 @@ test('CityJSON structure: valid for a town, a terrain town, a chord, a megastruc
     assert.match(doc.metadata.title, /^Cymatic City Engine \d+\.\d+\.\d+ · /);
     assert.deepEqual(Object.keys(doc).sort(), ['CityObjects', 'metadata', 'transform', 'type', 'version', 'vertices']);
   }
-  const frame = cityAt(city(), { year: 30 }).layout, Y = JSON.parse(toCityJSON(frame, { horizon: 100 }));
+  const frame = cityAt(city(), { year: 30 }).layout, Y = JSON.parse(toCityJSON(frame));
   assert.deepEqual(checkCityJSON(Y), []);
   assert.match(Y.metadata.title, /year 30 of 100$/);
   const first = frame.buildings[0];

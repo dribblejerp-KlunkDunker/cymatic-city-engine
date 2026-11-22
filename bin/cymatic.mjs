@@ -31,7 +31,7 @@ const COMMANDS = ['summary', 'checks', 'metrics', 'query', 'ask', 'generate', 'e
 const FORMATS = [['.city.json', 'cityjson'], ['.geojson', 'geojson'], ['.gltf', 'gltf'], ['.glb', 'glb'], ['.obj', 'obj'], ['.json', 'json']];
 export const formatOf = (file) => FORMATS.find(([ext]) => file.toLowerCase().endsWith(ext))?.[1] ?? null;
 
-export function parseArgs(argv) {
+export function parseArgs(argv, readStdin = () => readFileSync(0, 'utf8')) {
   const out = { command: 'summary', profile: {}, positional: [], flags: {} };
   const args = [...argv];
   if (args.length && COMMANDS.includes(args[0])) out.command = args.shift();
@@ -68,15 +68,15 @@ export function parseArgs(argv) {
       case '--all': out.flags.all = true; break;
       case '-h': case '--help': out.command = 'help'; break;
       default:
-        if (a.startsWith('-') && !/^-\d/.test(a)) throw new Error(`Unknown option ${a} (cymatic help)`);
+        if (a !== '-' && a.startsWith('-') && !/^-\d/.test(a)) throw new Error(`Unknown option ${a} (cymatic help)`);
         out.positional.push(a);
     }
   }
-  // the first positional is a profile when it looks like one (JSON or a .json file)
+  // the first positional is a profile when it looks like one: JSON, a .json file, or - for standard input
   const first = out.positional[0];
-  if (first !== undefined && (first.trim().startsWith('{') || /\.json$/i.test(first))) {
+  if (first !== undefined && (first === '-' || first.trim().startsWith('{') || /\.json$/i.test(first))) {
     out.positional.shift();
-    const text = first.trim().startsWith('{') ? first : readFileSync(first, 'utf8');
+    const text = first === '-' ? readStdin() : first.trim().startsWith('{') ? first : readFileSync(first, 'utf8');
     let p;
     try { p = JSON.parse(text); } catch (e) { throw new Error(`Profile is not valid JSON: ${e.message}`); }
     // a saved profile may wrap the input as { input, engine, theme }
@@ -149,42 +149,64 @@ commands
 time        --year Y [--horizon H] works with every city command: the city as it stood Y years into a growth
             that completes the plan at H years (--horizon, else the profile's horizon, else 100)
 
+            a profile that carries "year" (saved from the page while a year of growth was shown) is built at that year
+streams     a profile of - is read from standard input; --out - with --format writes the file to standard output
+            (the one-line report then goes to standard error)
+
 profile     JSON string or file.json, or -f/--frequency, --chord 432,540[:w], --plate circle|square|sphere,
             --preset town|city|megastructure|alien, --seed, --Q, --gravity, --material, --terrain flat|relief|valleys, --fantasy
 output      text by default; --json for machine-readable; --strict exits 2 when any check fails (with --infra, the networks' too)`;
 
-export function run(argv, io = { log: (s) => process.stdout.write(s + '\n') }) {
-  const a = parseArgs(argv), json = !!a.flags.json;
-  const print = (obj, text) => io.log(json ? JSON.stringify(obj) : text ?? JSON.stringify(obj, null, 2));
+// flags that only mean something to `generate`, and the formats each applies to
+const EXPORT_FLAGS = { out: ['--out', null], format: ['--format', null], origin: ['--origin', ['geojson']], bearing: ['--bearing', ['geojson']], paint: ['--paint', ['glb', 'gltf']], instanced: ['--instanced', ['glb', 'gltf']], noTrees: ['--no-trees', ['glb', 'gltf']] };
+const FORMAT_NAMES = { glb: 'glTF', gltf: 'glTF', geojson: 'GeoJSON', cityjson: 'CityJSON', obj: 'OBJ', json: 'JSON' };
+
+// io.log prints a line; io.write puts file bytes on standard output (--out -); io.note reports beside them;
+// io.stdin reads a profile given as -
+export function run(argv, io = {}) {
+  const log = io.log ?? ((s) => process.stdout.write(s + '\n')), note = io.note ?? ((s) => process.stderr.write(s + '\n'));
+  const a = parseArgs(argv, io.stdin), json = !!a.flags.json;
+  const print = (obj, text, to = log) => to(json ? JSON.stringify(obj) : text ?? JSON.stringify(obj, null, 2));
+  const exporting = a.command === 'generate' || a.command === 'export';
+  if (!exporting) for (const [key, [flag]] of Object.entries(EXPORT_FLAGS)) if (a.flags[key] !== undefined) throw new Error(`${flag} belongs to generate; ${a.command} does not write a file`);
   switch (a.command) {
-    case 'help': io.log(HELP); return 0;
+    case 'help': log(HELP); return 0;
     case 'tools': {
       const tools = agentTools().map(({ name, description, input_schema }) => ({ name, description, schemaBytes: JSON.stringify(input_schema).length }));
       print(tools, tools.map((t) => `${t.name} (${t.schemaBytes} B schema)\n  ${t.description.slice(0, 160)}${t.description.length > 160 ? '…' : ''}`).join('\n'));
       return 0;
     }
-    case 'metrics': {
-      const names = a.positional.length ? a.positional : ['population', 'jobs', 'failingChecks'];
-      const r = metricsOf(a.profile, names);
-      print(r, Object.entries(r).map(([k, v]) => `${k} ${fmt(v)}`).join('\n'));
-      return 0;
-    }
   }
-  if (a.positional.length && a.command !== 'ask') throw new Error(`Unexpected argument "${a.positional[0]}" (cymatic help)`);
-  let city = cityOf(generateCity(a.profile)), when = null;
-  if (a.flags.year !== undefined) {
-    const horizon = a.flags.horizon ?? a.profile.horizon ?? 100;
-    if (typeof horizon !== 'number') throw new Error(`The profile's horizon must be a number of years (got ${JSON.stringify(horizon)})`);
-    const frame = cityAt(city.layout, { year: a.flags.year, horizon });
-    city = cityOf(frame.layout); when = { year: frame.year, horizon }; // a frame is a complete city with its networks
-  } else if (a.flags.horizon !== undefined) throw new Error('--horizon sets the growth a --year is measured in; give --year too');
+  if (a.positional.length && a.command !== 'ask' && a.command !== 'metrics') throw new Error(`Unexpected argument "${a.positional[0]}" (cymatic help)`);
+  // The year: --year, else the profile's own (a year of growth saved from the page names itself). The horizon the
+  // same way, else 100.
+  const year = a.flags.year ?? a.profile.year, horizon = a.flags.horizon ?? a.profile.horizon ?? 100;
+  if (year !== undefined && typeof year !== 'number') throw new Error(`The profile's year must be a number (got ${JSON.stringify(year)})`);
+  if (year === undefined && a.flags.horizon !== undefined) throw new Error('--horizon sets the growth a --year is measured in; give --year too');
+  if (year !== undefined && typeof horizon !== 'number') throw new Error(`The profile's horizon must be a number of years (got ${JSON.stringify(horizon)})`);
+  let when = null;
+  const build = () => {
+    const plan = cityOf(generateCity(a.profile));
+    if (year === undefined) return plan;
+    const frame = cityAt(plan.layout, { year, horizon });
+    when = { year: frame.year, horizon };
+    return cityOf(frame.layout); // a frame is a complete city with its networks
+  };
+  if (a.command === 'metrics') {
+    const names = a.positional.length ? a.positional : ['population', 'jobs', 'failingChecks'];
+    const r = metricsOf(a.profile, names, year === undefined ? {} : { city: build() }); // without a year, only the stages the metrics need are built
+    print(r, Object.entries(r).map(([k, v]) => `${k} ${fmt(v)}`).join('\n'));
+    return 0;
+  }
+  const city = build();
   const withInfra = !!(a.flags.infra || a.flags.people);
   // --strict judges every check the command looked at: the plan's, and the networks' when they were asked for
   const failing = () => [...city.layout.checks, ...(withInfra ? city.infra.checks ?? [] : [])].some((c) => c.status === 'fail');
   switch (a.command) {
     case 'summary': {
       const S = summarize(city, a.flags);
-      print(S, summaryText(S));
+      if (when) Object.assign(S, when);
+      print(S, summaryText(S) + (when ? `\nyear ${when.year} of ${when.horizon}` : ''));
       break;
     }
     case 'checks': {
@@ -210,21 +232,31 @@ export function run(argv, io = { log: (s) => process.stdout.write(s + '\n') }) {
     }
     case 'generate': case 'export': {
       const file = a.flags.out;
-      if (!file) throw new Error(`${a.command} needs --out <file> (.glb .gltf .geojson .city.json .obj .json)`);
+      if (!file) throw new Error(`${a.command} needs --out <file> (.glb .gltf .geojson .city.json .obj .json), or --out - with --format for standard output`);
+      const toStdout = file === '-';
       // the extension names the format; anything else is refused rather than written as JSON under another name
-      const format = a.flags.format ?? formatOf(file);
-      if (!FORMATS.some(([, f]) => f === format)) throw new Error(a.flags.format ? `--format must be one of ${FORMATS.map(([, f]) => f).join(', ')} (got "${a.flags.format}")` : `"${file}" has no format this command writes (${FORMATS.map(([ext]) => ext).join(' ')}); name one with --format`);
-      const layout = city.layout;
+      const format = a.flags.format ?? (toStdout ? null : formatOf(file));
+      if (!FORMATS.some(([, f]) => f === format)) throw new Error(a.flags.format ? `--format must be one of ${FORMATS.map(([, f]) => f).join(', ')} (got "${a.flags.format}")` : toStdout ? `--out - writes to standard output and needs --format (${FORMATS.map(([, f]) => f).join(', ')})` : `"${file}" has no format this command writes (${FORMATS.map(([ext]) => ext).join(' ')}); name one with --format`);
+      if (toStdout && format === 'gltf') throw new Error('glTF as .gltf is two files (the document and its .bin), so it cannot go to standard output; use --format glb');
+      // a flag that would change nothing in this format is a mistake worth hearing about
+      for (const [key, [flag, formats]] of Object.entries(EXPORT_FLAGS)) if (formats && a.flags[key] !== undefined && !formats.includes(format)) throw new Error(`${flag} applies to ${[...new Set(formats.map((f) => FORMAT_NAMES[f]))].join(' and ')} only; this file is ${FORMAT_NAMES[format]}`);
       if (a.flags.infra) void city.infra; // attaches layout.infra and its OBJ writer
-      const common = { infra: !!a.flags.infra, horizon: when?.horizon };
+      // --infra decides whether the networks are written, for a year of growth as for the plan
+      let layout = city.layout;
+      if (!a.flags.infra && (layout.infra || layout.infraToOBJ)) { const { infra: _i, infraToOBJ: _o, ...rest } = layout; layout = rest; }
+      const common = { infra: !!a.flags.infra };
       const written = [];
-      const write = (name, body) => { writeFileSync(name, body); written.push({ file: name, bytes: typeof body === 'string' ? Buffer.byteLength(body) : body.length }); };
+      const write = (name, body) => {
+        if (toStdout) (io.write ?? ((b) => process.stdout.write(b)))(typeof body === 'string' ? body : Buffer.from(body.buffer, body.byteOffset, body.byteLength));
+        else writeFileSync(name, body);
+        written.push({ file: toStdout ? '(standard output)' : name, bytes: typeof body === 'string' ? Buffer.byteLength(body) : body.length });
+      };
       if (format === 'json') write(file, toJSON(layout));
       else if (format === 'obj') write(file, toOBJ(layout));
       else if (format === 'geojson') {
         if (!a.flags.origin) throw new Error('GeoJSON places the city on the Earth: give --origin latitude,longitude (and --bearing if plan-north is not north)');
         write(file, toGeoJSON(layout, { ...common, origin: a.flags.origin, bearing: a.flags.bearing ?? 0 }));
-      } else if (format === 'cityjson') write(file, toCityJSON(layout, common));
+      } else if (format === 'cityjson') write(file, toCityJSON(layout));
       else {
         // the ground under a terrain city comes from the same field the city was built on
         let elevation;
@@ -240,8 +272,9 @@ export function run(argv, io = { log: (s) => process.stdout.write(s + '\n') }) {
       const out = { wrote: written[0].file, bytes: written[0].bytes, format, buildings: layout.buildings.length };
       if (written[1]) out.also = written[1];
       if (when) Object.assign(out, when);
-      if (a.flags.instanced && (format === 'glb' || format === 'gltf')) out.note = 'instanced: per-building extras are not written';
-      print(out, `wrote ${out.wrote} (${fmt(out.bytes)} bytes${written[1] ? ` + ${written[1].file}, ${fmt(written[1].bytes)} bytes` : ''}) · ${format} · ${fmt(out.buildings)} buildings${when ? ` · year ${when.year} of ${when.horizon}` : ''}${out.note ? ` · ${out.note}` : ''}`);
+      if (a.flags.instanced && (format === 'glb' || format === 'gltf')) out.note = 'instanced: per-building extras are not written, and importers without EXT_mesh_gpu_instancing show one unit mesh per group';
+      // when the file itself is on standard output, the report goes beside it, not into it
+      print(out, `wrote ${out.wrote} (${fmt(out.bytes)} bytes${written[1] ? ` + ${written[1].file}, ${fmt(written[1].bytes)} bytes` : ''}) · ${format} · ${fmt(out.buildings)} buildings${when ? ` · year ${when.year} of ${when.horizon}` : ''}${out.note ? ` · ${out.note}` : ''}`, toStdout ? note : log);
       break;
     }
   }

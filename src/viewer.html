@@ -351,7 +351,7 @@ textarea { font: 400 var(--step--1)/1.3 var(--mono); resize: vertical; }
       <section>
         <h2>Simulation</h2>
         <div class="inline">
-          <label class="field" for="sim-years" style="flex:1">Horizon (years)<input type="number" id="sim-years" min="10" max="400" step="10" value="100"></label>
+          <label class="field" for="sim-years" style="flex:1">Horizon (years)<input type="number" id="sim-years" min="5" max="1000" step="any" value="100"></label>
           <button class="primary" id="sim-run" style="align-self:end">Simulate growth</button>
         </div>
         <div id="sim-progress" class="hint" hidden></div>
@@ -508,9 +508,11 @@ const previewTerrain = (mt) => (mt && mt.mode === "heightmap" ? (heightmapData ?
 // the growth horizon: years until the plan is built out. A year of a city's life only means something with it,
 // so it travels in the profile whenever it is not the default
 const DEFAULT_HORIZON = 100;
-const horizonYears = () => Math.max(10, Math.min(400, parseInt($("sim-years").value, 10) || DEFAULT_HORIZON));
+const horizonYears = () => { const v = parseFloat($("sim-years").value); return Number.isFinite(v) ? Math.max(5, Math.min(1000, v)) : DEFAULT_HORIZON; };
 // a profile is everything needed to reproduce a city, plus the theme
-const profileOf = () => { const p = { engine: ENGINE_VERSION, ...engineParams(), theme: params.theme }; if (horizonYears() !== DEFAULT_HORIZON) p.horizon = horizonYears(); if (p.terrain?.heightmap) p.terrain = { ...p.terrain, heightmap: { width: p.terrain.heightmap.width, height: p.terrain.heightmap.height, note: "grid not included; load the PNG again" } }; return p; };
+// while a year of growth is on screen, the profile names that year and the horizon it grew under, so the
+// saved files can be rebuilt from it (cymatic generate profile.json)
+const profileOf = () => { const p = { engine: ENGINE_VERSION, ...engineParams(), theme: params.theme }; const shown = layout?.meta?.year !== undefined ? layout.meta : null, h = shown ? shown.horizon : horizonYears(); if (shown) p.year = shown.year; if (h !== DEFAULT_HORIZON) p.horizon = h; if (p.terrain?.heightmap) p.terrain = { ...p.terrain, heightmap: { width: p.terrain.heightmap.width, height: p.terrain.heightmap.height, note: "grid not included; load the PNG again" } }; return p; };
 function applyProfile(p) {
   if (!p || typeof p !== "object") throw new Error("Not a profile");
   const n = { ...DEFAULTS, custom: { base: "city" } };
@@ -529,7 +531,7 @@ function applyProfile(p) {
     const t = typeof p.terrain === "string" ? { mode: p.terrain } : p.terrain;
     n.terrain = { mode: TERRAIN_MODES.includes(t.mode) ? t.mode : "flat", relief: Number.isFinite(+t.relief) && t.relief !== "auto" && t.relief != null ? +t.relief : null, waterLevel: Number.isFinite(+t.waterLevel) && t.waterLevel !== "auto" && t.waterLevel != null ? +t.waterLevel : null, canals: !!t.canals };
   }
-  $("sim-years").value = Number.isFinite(+p.horizon) && p.horizon != null ? Math.max(10, Math.min(400, Math.round(+p.horizon))) : DEFAULT_HORIZON;
+  $("sim-years").value = Number.isFinite(+p.horizon) && p.horizon != null ? Math.max(5, Math.min(1000, +p.horizon)) : DEFAULT_HORIZON;
   params = n; applyTheme(); regenerate(0);
 }
 
@@ -574,6 +576,7 @@ let WORKER_URL = null; // the engine worker's source, reused for a search worker
 let worker = null, jobId = 0, pendingTimer = 0, layout = null, baseLayout = null, lastFrameKey = "";
 let sim = null, simJob = 0, currentKeyframe = -1;
 let groundSampler = null; // (x, z) → ground height of the city on screen, for the glTF export
+const resilienceOf = new WeakMap(); // layout → its N-1 scores, kept beside the layout so layout.json stays the layout
 const pending = new Map(); // id → { resolve, reject, onProgress }
 try {
   const src = $("engine-src").textContent + `
@@ -653,7 +656,7 @@ function regenerate(delay = 220) {
     clearSimulation();
     const gen = ++genSeq;
     $("sim-run").disabled = true;
-    try { const r = await ask("generate", { p: engineParams() }); if (r.gen === genSeq) { baseLayout = r.L; baseLayout.resilience = r.R; show(r.L); $("sim-run").disabled = false; } }
+    try { const r = await ask("generate", { p: engineParams() }); if (r.gen === genSeq) { baseLayout = r.L; resilienceOf.set(r.L, r.R); show(r.L); $("sim-run").disabled = false; } }
     catch (err) { if (gen === genSeq) { fail(err.message); $("sim-run").disabled = !baseLayout; } }
   }, delay);
 }
@@ -978,7 +981,7 @@ function show(L) {
   for (const m of pickTargets) if (m.instanceColor) m.userData.baseColors = m.instanceColor.array.slice();
   if ($("paint").value === "era") applyPaint(); // era colours need no people run, so they survive a regeneration
   if ($("flows-on").checked) applyFlows();
-  updateResilience(L, L.resilience);
+  updateResilience(L, resilienceOf.get(L));
   invalidate();
 }
 
@@ -1500,7 +1503,7 @@ async function showKeyframe(k) {
   const K = sim.keyframes[k];
   $("year-label").textContent = `${K.year} · ${K.stats.buildings.toLocaleString("en-US")} buildings · ${K.stats.population.toLocaleString("en-US")} people`;
   $("busy").textContent = `Year ${K.year}…`; $("busy").hidden = false;
-  try { const r = await ask("keyframe", { k }); if (r.gen === genSeq && r.k === currentKeyframe) { r.L.infraToOBJ = infraToOBJ; r.L.resilience = r.R; show(r.L); } }
+  try { const r = await ask("keyframe", { k }); if (r.gen === genSeq && r.k === currentKeyframe) { r.L.infraToOBJ = infraToOBJ; resilienceOf.set(r.L, r.R); show(r.L); } }
   catch (err) { fail(err.message); }
 }
 function showPlan() { if (!baseLayout) return; currentKeyframe = -1; $("year-label").textContent = "today's plan"; show(baseLayout); }
@@ -1872,14 +1875,14 @@ $("save-model").addEventListener("click", () => {
     `simulation.json (when simulated): growth events and per-keyframe stats; flows-HHMM.json (when flows are on): pressures, voltages, fullness and metro loads for that hour; people.json (when run): peak-hour flow, v/c, speed and lanes per street-graph edge, accessibility per node, land value and market zoning per building, trip statistics.`,
     `Same settings + same seed reproduce this layout exactly.`].join("\n");
   const flatPlate = layout.meta.plate !== "sphere", withNets = !!layout.infra;
-  const files = [{ name: "city.glb", bytes: toGLB(layout, { infra: withNets, paint: $("paint").value === "era" ? "era" : "zone", elevation: groundSampler ?? undefined, horizon: sim ? sim.years : undefined }) }];
-  if (flatPlate) files.push({ name: "city.city.json", text: toCityJSON(layout, { horizon: sim ? sim.years : undefined }) });
+  const files = [{ name: "city.glb", bytes: toGLB(layout, { infra: withNets, paint: $("paint").value === "era" ? "era" : "zone", elevation: groundSampler ?? undefined }) }];
+  if (flatPlate) files.push({ name: "city.city.json", text: toCityJSON(layout) });
   const originText = $("geo-origin").value.trim();
   if (originText) {
     const origin = originText.split(/[\s,;]+/).map(Number);
     try {
       if (!flatPlate) throw new Error("GeoJSON: a sphere plate is not a map of the Earth");
-      files.push({ name: "city.geojson", text: toGeoJSON(layout, { origin, infra: withNets, horizon: sim ? sim.years : undefined }) });
+      files.push({ name: "city.geojson", text: toGeoJSON(layout, { origin, infra: withNets }) });
     } catch (err) { $("status").textContent = `${err.message}. Nothing was saved.`; return; }
   }
   files.push({ name: "city.obj", text: toOBJ(layout) }, { name: "layout.json", text: toJSON(layout) }, { name: "profile.json", text: JSON.stringify(profileOf(), null, 2) }, { name: "README.txt", text: readme });
