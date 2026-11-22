@@ -1,7 +1,7 @@
 # Phase 7 — Fantasy as mechanics: spec
 
-Status: **final for implementation, pending five calls that are sleeves' to make** (listed at the end; each has
-a recommendation the stages assume). Written 2026-11-22 against engine 1.6.0. The calls are pictured on the
+Status: **final for implementation.** sleeves approved all five calls as recommended on 2026-11-22 (listed at
+the end). Written 2026-11-22 against engine 1.6.0. The calls are pictured on the
 real 432 Hz city in the artifact "Phase 7 Calls". Every number below was measured
 on 1.6.0 with the scripts in `docs/phase7-measurements/` (run any of them with `node`).
 
@@ -85,7 +85,7 @@ review are for the strongest.
   Buildings in a ward gain `ward: i`. Checks `self-weight` and `slenderness` judge each building by its own limit.
 - Networks: `gAt(node)` and `pressureAt(node)` by decision 6 replace the single `g` in the four places.
 - `dependent`, `ward-dependence`, `impact({ kind: 'ward' })`.
-- If call W is yes: `height` multiplies the height the pattern asks for, for each building in the ward, before any
+- `height` (call W, approved) multiplies the height the pattern asks for, for each building in the ward, before any
   limit is applied, in `generateCity` and wherever growth recomputes a building's height. A ward of `height`
   alone is not neutral and is kept.
 - **Out:** `layout.meta.magic.wards` (resolved), `layout.wards[]`, `building.ward`.
@@ -158,9 +158,9 @@ review are for the strongest.
   if ward 2 fails", "which nexus feeds the core"); five MCP evaluation questions.
 - `ENGINE_VERSION` 1.7.0, README, CHANGELOG, and the independent review in a fresh session.
 
-## Calls that are sleeves' to make
+## The five calls (approved as recommended, 2026-11-22)
 
-Each has a recommendation, and the stages above assume it. Changing one changes only the stage named.
+The stages above assume the recommended column. Changing one later changes only the stage named.
 
 | | Call | Recommended | The alternative |
 |---|---|---|---|
