@@ -4,7 +4,9 @@
 //           -> districts, lots and buildings under planning and structural limits.
 // Pure JavaScript, no dependencies; runs in the browser and in Node.
 
-export const ENGINE_VERSION = '1.5.0';
+import { DM } from './detmath.js';
+
+export const ENGINE_VERSION = '1.6.0';
 const TAU = Math.PI * 2;
 const G0 = 9.80665;
 
@@ -25,12 +27,12 @@ const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const scale3 = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-const len3 = (a) => Math.hypot(a[0], a[1], a[2]);
+const len3 = (a) => DM.hypot(a[0], a[1], a[2]);
 const norm3 = (a) => { const l = len3(a); return l > 0 ? [a[0] / l, a[1] / l, a[2] / l] : [0, 0, 0]; };
 
 export function noteName(f) {
   const names = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
-  const midi = 69 + 12 * Math.log2(f / 440);
+  const midi = 69 + 12 * DM.log2(f / 440);
   const n = Math.round(midi);
   const cents = Math.round((midi - n) * 100);
   const c = cents === 0 ? '' : ` ${cents > 0 ? '+' : '−'}${Math.abs(cents)}¢`;
@@ -47,7 +49,7 @@ export function besselJ(m, x) {
   let s = 0;
   for (let k = 0; k <= K; k++) {
     const t = (Math.PI * k) / K;
-    s += (k === 0 || k === K ? 0.5 : 1) * Math.cos(m * t - x * Math.sin(t));
+    s += (k === 0 || k === K ? 0.5 : 1) * DM.cos(m * t - x * DM.sin(t));
   }
   return s / K;
 }
@@ -96,9 +98,9 @@ export function legendreNormalized(l, m, x) {
 }
 
 export function realSphericalHarmonic(l, m, theta, phi) {
-  const p = legendreNormalized(l, Math.abs(m), Math.cos(theta));
+  const p = legendreNormalized(l, Math.abs(m), DM.cos(theta));
   if (m === 0) return p;
-  return Math.SQRT2 * p * (m > 0 ? Math.cos(m * phi) : Math.sin(-m * phi));
+  return Math.SQRT2 * p * (m > 0 ? DM.cos(m * phi) : DM.sin(-m * phi));
 }
 
 // ---------------------------------------------------------------- plates and modes
@@ -111,7 +113,7 @@ const CIRCLE_MAX_M = 40, CIRCLE_MAX_N = 20, SQUARE_MAX = 20, SPHERE_MAX_L = 48;
 
 // Square Chladni plate, corner coordinates x, y ∈ [0, 1]: zero edge slope for every (m, n).
 const squareShape = (m, n, sign, x, y) =>
-  Math.cos(n * Math.PI * x) * Math.cos(m * Math.PI * y) + sign * Math.cos(m * Math.PI * x) * Math.cos(n * Math.PI * y);
+  DM.cos(n * Math.PI * x) * DM.cos(m * Math.PI * y) + sign * DM.cos(m * Math.PI * x) * DM.cos(n * Math.PI * y);
 
 // Where the driver touches each plate, from a 0 (centre / near pole) – 1 (edge / equator side) offset.
 export function drivePoint(plate, d) {
@@ -133,8 +135,8 @@ export function enumerateModes(opts = {}) {
       for (let n = 1; n <= CIRCLE_MAX_N; n++) {
         const j = zs[n - 1];
         // ∫₀¹ J_m(j r)² r dr = J_{m+1}(j)²/2 at a zero of J_m; ∫cos²(mθ) = π (2π for m = 0)
-        const norm = (m === 0 ? 2 * Math.PI : Math.PI) * 0.5 * besselJ(m + 1, j) ** 2;
-        modes.push({ plate, m, n, j, f: (F * j) / j01, norm, coupling: besselJ(m, j * dp.r) * Math.cos(m * dp.theta) });
+        const norm = (m === 0 ? 2 * Math.PI : Math.PI) * 0.5 * DM.pow(besselJ(m + 1, j), 2);
+        modes.push({ plate, m, n, j, f: (F * j) / j01, norm, coupling: besselJ(m, j * dp.r) * DM.cos(m * dp.theta) });
       }
     }
   } else if (plate === 'square') {
@@ -178,7 +180,7 @@ export function drivenResponse(modes, f, Q = 100, opts = {}) {
     const den = d * d + g * g;
     const c = md.coupling / Math.sqrt(md.norm);
     const re = (c * d) / den, im = (-c * g) / den;
-    const mag = Math.hypot(re, im);
+    const mag = DM.hypot(re, im);
     if (mag > 1e-12 * Math.abs(1 / den) && Number.isFinite(mag)) scored.push({ md, re, im, mag });
   }
   scored.sort((a, b) => b.mag - a.mag);
@@ -191,8 +193,8 @@ export function drivenResponse(modes, f, Q = 100, opts = {}) {
   }
   let sr = 0, si = 0;
   for (const k of kept) { sr += (k.re * k.re - k.im * k.im) / (top.mag * top.mag); si += (2 * k.re * k.im) / (top.mag * top.mag); }
-  const psi = 0.5 * Math.atan2(si, sr);
-  const cs = Math.cos(psi), sn = Math.sin(psi);
+  const psi = 0.5 * DM.atan2(si, sr);
+  const cs = DM.cos(psi), sn = DM.sin(psi);
   let inPhase = 0, total = 0;
   const active = kept.map((sc) => {
     const ar = (sc.re * cs + sc.im * sn) / top.mag, ai = (sc.im * cs - sc.re * sn) / top.mag;
@@ -215,7 +217,7 @@ function makeField(plate, active) {
     if (plate === 'sphere') {
       const lut = new Float64Array(LUT_N + 1);
       const k = md.m > 0 ? Math.SQRT2 : 1;
-      for (let i = 0; i <= LUT_N; i++) lut[i] = k * legendreNormalized(md.l, md.m, Math.cos((Math.PI * i) / LUT_N));
+      for (let i = 0; i <= LUT_N; i++) lut[i] = k * legendreNormalized(md.l, md.m, DM.cos((Math.PI * i) / LUT_N));
       return { md, lut };
     }
     return { md };
@@ -231,9 +233,9 @@ function makeField(plate, active) {
     for (const t of terms) {
       const md = t.md;
       let phi;
-      if (plate === 'circle') phi = look(t.lut, Math.hypot(u, v)) * Math.cos(md.m * Math.atan2(v, u));
+      if (plate === 'circle') phi = look(t.lut, DM.hypot(u, v)) * DM.cos(md.m * DM.atan2(v, u));
       else if (plate === 'square') phi = squareShape(md.m, md.n, md.sign, u + 0.5, v + 0.5);
-      else phi = look(t.lut, u / Math.PI) * Math.cos(md.m * v);
+      else phi = look(t.lut, u / Math.PI) * DM.cos(md.m * v);
       S += md.cr * phi; Qd += md.ci * phi;
     }
     return [S, Qd];
@@ -242,7 +244,7 @@ function makeField(plate, active) {
     raw,
     setScale(s) { k = s; },
     // S: signed standing-wave field (zero set = nodal lines), A: vibration amplitude, both ≤ 1
-    at(u, v) { const [S, Qd] = raw(u, v); return { S: S * k, A: Math.hypot(S, Qd) * k }; },
+    at(u, v) { const [S, Qd] = raw(u, v); return { S: S * k, A: DM.hypot(S, Qd) * k }; },
     S(u, v) { return raw(u, v)[0] * k; },
   };
 }
@@ -264,7 +266,7 @@ function makeChordField(voices) {
   return {
     raw,
     setScale(s) { k = s; },
-    at(u, v) { const [S, Qd] = raw(u, v); return { S: S * k, A: Math.hypot(S, Qd) * k }; },
+    at(u, v) { const [S, Qd] = raw(u, v); return { S: S * k, A: DM.hypot(S, Qd) * k }; },
     S(u, v) { return raw(u, v)[0] * k; },
     voices,
   };
@@ -343,7 +345,7 @@ export function heightLimit(material, gravityRel) {
 }
 // Slenderness allowance grows as self-buckling eases with lower gravity (Greenhill, ∝ g^-1/3).
 export function slendernessLimit(base, gravityRel) {
-  return Math.min(40, base * Math.pow(1 / gravityRel, 1 / 3));
+  return Math.min(40, base * DM.pow(1 / gravityRel, 1 / 3));
 }
 
 // Fields a custom preset may override, with their allowed ranges.
@@ -452,7 +454,7 @@ function inTerritory(voices, i, u, v) { const w = voiceEnvelopes(voices, u, v); 
 // Max-filter a voice's amplitude grid over a radius in metres; returns a lookup env(u, v).
 function makeEnvelope(dom, g, radius) {
   const { ni, nj, W, S, Qd } = g, n = (ni + 1) * W;
-  const A = new Float64Array(n); for (let id = 0; id < n; id++) A[id] = Math.hypot(S[id], Qd[id]);
+  const A = new Float64Array(n); for (let id = 0; id < n; id++) A[id] = DM.hypot(S[id], Qd[id]);
   const tmp = new Float64Array(n), out = new Float64Array(n);
   const sphere = dom.kind === 'sphere';
   const cellI = sphere ? (Math.PI * dom.Rs) / ni : (dom.scale * (dom.hi - dom.lo)) / ni;
@@ -460,7 +462,7 @@ function makeEnvelope(dom, g, radius) {
   // along j (rows): on the sphere the cell narrows with sin θ, and longitude wraps
   for (let i = 0; i <= ni; i++) {
     let Rj;
-    if (sphere) { const sinT = Math.max(0.05, Math.sin((Math.PI * i) / ni)); Rj = Math.min(nj >> 1, Math.max(1, Math.round(radius / ((TAU * dom.Rs * sinT) / nj)))); }
+    if (sphere) { const sinT = Math.max(0.05, DM.sin((Math.PI * i) / ni)); Rj = Math.min(nj >> 1, Math.max(1, Math.round(radius / ((TAU * dom.Rs * sinT) / nj)))); }
     else Rj = Math.max(1, Math.round(radius / ((dom.scale * (dom.hi - dom.lo)) / nj)));
     for (let j = 0; j <= nj; j++) {
       let m = 0;
@@ -539,10 +541,10 @@ function makeDomain(p) {
   return {
     kind: 'sphere', shape: 'sphere', scale: Rs, area: 4 * Math.PI * Rs * Rs, extent: Rs, Rs,
     inside: () => true,
-    toWorld: (th, ph) => [Rs * Math.sin(th) * Math.cos(ph), Rs * Math.cos(th), Rs * Math.sin(th) * Math.sin(ph)],
+    toWorld: (th, ph) => [Rs * DM.sin(th) * DM.cos(ph), Rs * DM.cos(th), Rs * DM.sin(th) * DM.sin(ph)],
     toNorm: (P) => {
-      const th = Math.acos(clamp(P[1] / len3(P), -1, 1));
-      let ph = Math.atan2(P[2], P[0]); if (ph < 0) ph += TAU;
+      const th = DM.acos(clamp(P[1] / len3(P), -1, 1));
+      let ph = DM.atan2(P[2], P[0]); if (ph < 0) ph += TAU;
       return [th, ph];
     },
   };
@@ -561,9 +563,9 @@ function gradWorld(dom, field, u, v) {
   const h = 1e-3, Rs = dom.Rs;
   const th = clamp(u, 2e-3, Math.PI - 2e-3);
   const dth = (field.S(th + h, v) - field.S(th - h, v)) / (2 * h * Rs);
-  const dph = (field.S(th, v + h) - field.S(th, v - h)) / (2 * h * Rs * Math.sin(th));
-  const eTh = [Math.cos(th) * Math.cos(v), -Math.sin(th), Math.cos(th) * Math.sin(v)];
-  const ePh = [-Math.sin(v), 0, Math.cos(v)];
+  const dph = (field.S(th, v + h) - field.S(th, v - h)) / (2 * h * Rs * DM.sin(th));
+  const eTh = [DM.cos(th) * DM.cos(v), -DM.sin(th), DM.cos(th) * DM.sin(v)];
+  const ePh = [-DM.sin(v), 0, DM.cos(v)];
   return add(scale3(eTh, dth), scale3(ePh, dph));
 }
 
@@ -582,7 +584,7 @@ function sampleGrid(dom, field) {
       if (!dom.inside(u, v)) continue;
       const [s, q] = field.raw(u, v);
       S[id] = s; Qd[id] = q; valid[id] = 1;
-      maxA = Math.max(maxA, Math.hypot(s, q));
+      maxA = Math.max(maxA, DM.hypot(s, q));
     }
   }
   const k = maxA > 0 ? 1 / maxA : 1;
@@ -634,7 +636,7 @@ class SegmentHash {
     if (seg.mx === undefined) {
       Object.defineProperties(seg, {
         mx: { value: (a[0] + b[0]) / 2 }, my: { value: (a[1] + b[1]) / 2 }, mz: { value: (a[2] + b[2]) / 2 },
-        reach: { value: Math.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2 + (b[2] - a[2]) ** 2) / 2 + r },
+        reach: { value: DM.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]) / 2 + r },
       });
     }
     const lo = [Math.min(a[0], b[0]) - r, Math.min(a[1], b[1]) - r, Math.min(a[2], b[2]) - r];
@@ -770,7 +772,7 @@ function buildRoads(p, dom, field, g, opts = {}) {
     const pts = [];
     if (dom.shape === 'circle') {
       const r = 0.985, steps = Math.ceil((TAU * dom.scale) / 30);
-      for (let i = 0; i <= steps; i++) { const t = (TAU * i) / steps; pts.push(dom.toWorld(r * Math.cos(t), r * Math.sin(t))); }
+      for (let i = 0; i <= steps; i++) { const t = (TAU * i) / steps; pts.push(dom.toWorld(r * DM.cos(t), r * DM.sin(t))); }
     } else {
       const e = 0.49, n = Math.ceil(dom.scale / 30);
       const corners = [[-e, -e], [e, -e], [e, e], [-e, e], [-e, -e]];
@@ -878,7 +880,7 @@ function lotCandidates(dom, spacing, rng, jitter) {
   const ga = Math.PI * (3 - Math.sqrt(5));
   for (let k = 0; k < N; k++) {
     const y = 1 - (2 * (k + 0.5)) / N, r = Math.sqrt(1 - y * y), ph = k * ga;
-    const P = scale3([r * Math.cos(ph), y, r * Math.sin(ph)], dom.Rs);
+    const P = scale3([r * DM.cos(ph), y, r * DM.sin(ph)], dom.Rs);
     const [u, v] = dom.toNorm(P);
     out.push({ P, u, v });
   }
@@ -994,14 +996,14 @@ export function maxFieldSlope(dom, zNorm, grid) {
     if (dom.kind === 'sphere') {
       if (u < 0.05 || u > Math.PI - 0.05) continue;
       gu = (zNorm(u + h, v) - zNorm(u - h, v)) / (2 * h * dom.Rs);
-      gv = (zNorm(u, v + h) - zNorm(u, v - h)) / (2 * h * dom.Rs * Math.sin(u));
+      gv = (zNorm(u, v + h) - zNorm(u, v - h)) / (2 * h * dom.Rs * DM.sin(u));
     } else {
       const mPerUnit = dom.scale; // toWorld maps one unit of u to dom.scale metres on both plane shapes
       if (!dom.inside(u + h, v) || !dom.inside(u - h, v) || !dom.inside(u, v + h) || !dom.inside(u, v - h)) continue;
       gu = (zNorm(u + h, v) - zNorm(u - h, v)) / (2 * h * mPerUnit);
       gv = (zNorm(u, v + h) - zNorm(u, v - h)) / (2 * h * mPerUnit);
     }
-    m = Math.max(m, Math.hypot(gu, gv));
+    m = Math.max(m, DM.hypot(gu, gv));
   }
   return m;
 }
@@ -1143,7 +1145,7 @@ export function generateCity(input = {}) {
       const c = hash.clearance(P);
       if (c < foot * 0.71 + 1) { roadLots++; cellOf.push(-1); continue; }
       if (amp < 0.06) { greenLots++; trees.push({ pos: P, up: upAt(dom, P), s: 1 + rng() }); cellOf.push(-1); continue; }
-      const want = pr.designHeight * Math.pow(amp * (0.94 + 0.12 * rng()), 1.15);
+      const want = pr.designHeight * DM.pow(amp * (0.94 + 0.12 * rng()), 1.15);
       const h = clamp(Math.round(want / step) * step, step, hTop);
       if (h === hTop && want > hTop + step / 2 && H === hMat) binding.material++;
       const { up, fwd } = frame(P, u, v);
@@ -1231,7 +1233,7 @@ export function generateCity(input = {}) {
       const r1 = rng(), r2 = rng(), r3 = rng();
       let w = size * { core: 0.8, mixed: 0.74, residential: 0.66 }[zone] * (0.9 + 0.2 * r1);
       let d = zone === 'core' ? w * (0.85 + 0.15 * r2) : w * (0.62 + 0.3 * r2);
-      const hd = Math.hypot(w, d) / 2;
+      const hd = DM.hypot(w, d) / 2;
       if (hd > hdCell) { const k = hdCell / hd; w *= k; d *= k; }
       const { up, fwd } = frame(P, u, v);
       let ok = false;
@@ -1244,7 +1246,7 @@ export function generateCity(input = {}) {
       let floors;
       if (zone === 'residential') floors = lerp(f0, f1 * 0.5, clamp((amp - 0.12) / 0.3, 0, 1));
       else if (zone === 'mixed') floors = lerp(f1 * 0.5, f1, clamp((amp - 0.42) / 0.3, 0, 1));
-      else floors = lerp(f1, pr.coreFloors, Math.pow(clamp((amp - 0.72) / 0.28, 0, 1), 1.4));
+      else floors = lerp(f1, pr.coreFloors, DM.pow(clamp((amp - 0.72) / 0.28, 0, 1), 1.4));
       floors = Math.max(1, Math.round(floors * (0.8 + 0.4 * r3)));
       let shape = zone === 'core' ? 'tower' : 'block';
       if (pr.style === 'alien') shape = zone === 'core' ? 'spire' : zone === 'mixed' ? (r1 < 0.5 ? 'pod' : 'dome') : 'dome';
@@ -1288,7 +1290,7 @@ export function generateCity(input = {}) {
     for (const b of best.values()) { b.landmark = true; b.floors = Math.round(b.floors * 1.3); }
 
     // a wider footprint must stay inside the lot's no-overlap radius and clear every road
-    const canWiden = (b, W, D) => Math.hypot(W, D) / 2 <= b.hdCell + 1e-9 && fits(b.pos, b.up, b.fwd, W, D);
+    const canWiden = (b, W, D) => DM.hypot(W, D) / 2 <= b.hdCell + 1e-9 && fits(b.pos, b.up, b.fwd, W, D);
     // structural limits: widen toward the slenderness rule where the lot allows, else cap the height
     for (const b of buildings) {
       let h = b.floors * pr.floorH;
@@ -1533,7 +1535,7 @@ export function buildingMesh(b) {
   const ring = (lift, s) => {
     const pts = [];
     for (let i = 0; i < sides; i++) {
-      const t = sides === 4 ? [[-1, -1], [1, -1], [1, 1], [-1, 1]][i] : [Math.cos((TAU * i) / sides), Math.sin((TAU * i) / sides)];
+      const t = sides === 4 ? [[-1, -1], [1, -1], [1, 1], [-1, 1]][i] : [DM.cos((TAU * i) / sides), DM.sin((TAU * i) / sides)];
       const x = (t[0] * b.w * s) / 2, z = (t[1] * b.d * s) / 2;
       pts.push(add(add(add(b.pos, scale3(fwd, x)), scale3(right, z)), scale3(up, lift)));
     }

@@ -3,9 +3,10 @@
 // when an asset fails; N-1 resilience). Constants and formulas are in docs/research-notes/simulation_standards.md.
 import { mulberry32, CORE_FLOORS, MIN_CORE_SIDE, checksFor } from './cymatic-engine.js';
 import { buildInfrastructure, SEWER, TRANSIT } from './infrastructure.js';
+import { DM } from './detmath.js';
 
 const G0 = 9.80665;
-const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+const dist = (a, b) => DM.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 
 // ---------------------------------------------------------------- hourly profiles
@@ -15,7 +16,7 @@ function mixture(base, peaks, normalise) {
   const h24 = (h, mu) => { let d = Math.abs(h - mu); return Math.min(d, 24 - d); };
   const f = Array.from({ length: 24 }, (_, h) => {
     const t = h + 0.5;
-    return base + peaks.reduce((s, [a, mu, sg]) => s + a * Math.exp(-(h24(t, mu) ** 2) / (2 * sg * sg)), 0);
+    return base + peaks.reduce((s, [a, mu, sg]) => s + a * DM.exp(-DM.pow(h24(t, mu), 2) / (2 * sg * sg)), 0);
   });
   const k = normalise === 'sum' ? f.reduce((s, x) => s + x, 0) : f.reduce((s, x) => s + x, 0) / 24;
   return f.map((x) => x / k);
@@ -33,7 +34,7 @@ export const PEAK_HOUR = Object.fromEntries(Object.entries(PROFILES).map(([k, p]
 // Hazen-Williams head loss (m): Q m³/s, D m, L m. SI constant 10.67.
 export function hazenWilliams(Q, D, L, C = 130) {
   if (Q <= 0) return 0;
-  return (10.67 * L * Math.pow(Q, 1.852)) / (Math.pow(C, 1.852) * Math.pow(D, 4.87));
+  return (10.67 * L * DM.pow(Q, 1.852)) / (DM.pow(C, 1.852) * DM.pow(D, 4.87));
 }
 // Three-phase line-to-line drop (V): I A, L km, R and X Ω/km.
 export function voltageDrop(I, Lkm, R, X, pf = 0.95) {
@@ -53,9 +54,9 @@ export function cableFor(classMVA) {
 const HYDRAULIC_ELEMENTS = (() => {
   const pts = [];
   for (let i = 0; i <= 200; i++) {
-    const y = i / 200, th = 2 * Math.acos(1 - 2 * y);
-    const A = (th - Math.sin(th)) / 8, P = th / 2, R = P > 0 ? A / P : 0;
-    const q = A * Math.pow(R, 2 / 3) / (Math.PI / 4 * Math.pow(0.25, 2 / 3));
+    const y = i / 200, th = 2 * DM.acos(1 - 2 * y);
+    const A = (th - DM.sin(th)) / 8, P = th / 2, R = P > 0 ? A / P : 0;
+    const q = A * DM.pow(R, 2 / 3) / (Math.PI / 4 * DM.pow(0.25, 2 / 3));
     pts.push([y, q]);
   }
   return pts;
@@ -70,7 +71,7 @@ export function partialFlowDepth(qRatio) {
 // Weibull lifetimes by building type (years): shape 1.5, scale by type. Western stock; the China figure is far shorter.
 export const LIFETIMES = { house: 80, block: 70, tower: 90, pod: 75, dome: 75, spire: 90, terrace: 120, shape: 1.5 };
 export const GROWTH = { rate: 0.037 /* built-up area growth per year */, modeShare: 0.35, catchment: 1200, lineCapacity: 30000 };
-const weibull = (u, scale, k = LIFETIMES.shape) => scale * Math.pow(-Math.log(1 - Math.min(u, 0.999999)), 1 / k);
+const weibull = (u, scale, k = LIFETIMES.shape) => scale * DM.pow(-DM.log(1 - Math.min(u, 0.999999)), 1 / k);
 
 // ---------------------------------------------------------------- shared helpers
 const nodeKey = (P) => `${Math.round(P[0] * 4)},${Math.round(P[1] * 4)},${Math.round(P[2] * 4)}`;
@@ -89,14 +90,14 @@ function dijkstraFrom(graph, source, weight = (e) => e.len) {
 function segDist(P, A, B) {
   const ab = [B[0] - A[0], B[1] - A[1], B[2] - A[2]], ap = [P[0] - A[0], P[1] - A[1], P[2] - A[2]];
   const L2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2] || 1, t = Math.max(0, Math.min(1, (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / L2));
-  return Math.hypot(ap[0] - t * ab[0], ap[1] - t * ab[1], ap[2] - t * ab[2]);
+  return DM.hypot(ap[0] - t * ab[0], ap[1] - t * ab[1], ap[2] - t * ab[2]);
 }
 function drivePointWorld(meta) {
   const d = meta.driveOffset ?? 0.37, E = meta.world.extent;
   if (meta.plate === 'circle') return [d * E, 0, 0];
   if (meta.plate === 'square') return [d * E, 0, 0.62 * d * E];
   const th = Math.PI * (0.15 + 0.7 * d), Rs = meta.world.Rs;
-  return [Rs * Math.sin(th), Rs * Math.cos(th), 0];
+  return [Rs * DM.sin(th), Rs * DM.cos(th), 0];
 }
 const shapeVolume = { block: 1, house: 1, tower: 1, terrace: 1, pod: 0.785, dome: 0.5, spire: 0.33 };
 const resShare = { residential: 0.9, mixed: 0.5, core: 0.25, green: 0 };
@@ -111,10 +112,13 @@ export function cityStats(layout) {
 }
 
 // ---------------------------------------------------------------- growth
-export function simulate(layout, opts = {}) {
+// Growth is three steps: schedule() decides when everything is built (all the random draws happen here),
+// frameAt() assembles the complete city as it stood at one year, and simulate() is the schedule plus K frames
+// and the event log. The schedule depends on the horizon (`years`): growth is paced to finish the plan at the
+// horizon, so the same year under two horizons is two different cities. It does not depend on K.
+export function schedule(layout, opts = {}) {
   if (!layout.buildings.length) throw new Error('Nothing to simulate: the city has no buildings (is everything under water?)');
   const years = Math.max(5, Number(opts.years ?? 100));
-  const K = Math.max(2, Math.min(24, Number(opts.keyframes ?? 8)));
   const infra = layout.infra ?? buildInfrastructure(layout);
   const meta = layout.meta, graph = infra.graph;
   const rng = mulberry32((meta.seed * 7919 + 101) >>> 0);
@@ -143,11 +147,11 @@ export function simulate(layout, opts = {}) {
     const dd = Number.isFinite(dist0[nodeOf[i]]) ? dist0[nodeOf[i]] : 4 * E;
     return { i, s: eraOf(b) * 1e9 + (dd + 15) * (1.3 - 0.6 * b.amp) * (1 + 0.25 * (rng() - 0.5)), distance: dd };
   }).sort((x, y) => x.s - y.s || x.i - y.i);
-  const r = GROWTH.rate, denom = Math.exp(r * years) - 1;
+  const r = GROWTH.rate, denom = DM.exp(r * years) - 1;
   const history = new Array(layout.buildings.length);
   score.forEach((sc, rank) => {
     const q = score.length > 1 ? rank / (score.length - 1) : 0; // first building at year 0, last at the horizon
-    const built = Math.round(10 * Math.log(1 + q * denom) / r) / 10;
+    const built = Math.round(10 * DM.log(1 + q * denom) / r) / 10;
     const b = layout.buildings[sc.i], side = Math.min(b.w, b.d), F = b.floors;
     const amp = b.amp, arc = b.shape === 'terrace';
     const cap = (floors) => {
@@ -211,44 +215,74 @@ export function simulate(layout, opts = {}) {
     if (e > 0 && y < (eraStart[e] ?? Infinity)) y = Math.min(routeYear[i], eraStart[e] ?? Infinity);
     return y;
   });
+  return { years, chord, founding: { building: fb, node: founding }, history, roadYear, eraStart };
+}
 
-  // keyframes: complete cities at K years, networks rebuilt for what exists
+// The complete city at one year of a schedule: what is built, at the height of its day, the streets that are
+// open, and the networks rebuilt for what exists. Draws no random numbers. Its meta carries the year and the
+// horizon, because a year names a city only together with the horizon its growth was paced to.
+export function frameAt(layout, sched, year) {
+  const { history, roadYear, eraStart, chord } = sched, meta = layout.meta;
+  const buildings = [];
+  for (const h of history) {
+    if (h.built > year) continue;
+    let g = h.generations[0];
+    for (const gg of h.generations) if (gg.year <= year) g = gg;
+    const b = layout.buildings[h.building];
+    buildings.push({ ...b, floors: g.floors, h: b.shape === 'dome' ? Math.min(g.h, 0.6 * Math.min(b.w, b.d)) : g.h, built: h.built, rebuilt: g.year, source: h.building });
+  }
+  // a later voice's street that an older route opened early was built by the voice of its day: credit it to that
+  // voice, and keep whose sand lines it follows
+  const builtBy = (y) => { let e = 0; eraStart.forEach((ys, k) => { if (ys != null && ys <= y) e = Math.max(e, k); }); return e; };
+  const roads = [];
+  layout.roads.forEach((rd, i) => {
+    if (roadYear[i] > year) return;
+    const e = chord ? rd.era ?? 0 : 0;
+    if (e > 0 && roadYear[i] < (eraStart[e] ?? Infinity)) roads.push({ ...rd, era: builtBy(roadYear[i]), follows: e });
+    else roads.push(rd);
+  });
+  const trees = layout.trees;
+  const sub = { meta: { ...meta, year, horizon: sched.years }, roads, buildings, trees, stats: { ...layout.stats }, checks: [] };
+  const inf = buildInfrastructure(sub);
+  sub.infra = inf;
+  const roadLen = roads.reduce((a, rd) => a + dist(rd.a, rd.b), 0), roadArea = roads.reduce((a, rd) => a + dist(rd.a, rd.b) * rd.w, 0);
+  const cs = cityStats(sub);
+  sub.stats = { ...layout.stats, ...cs, roadSegments: roads.length, roadLengthKm: roadLen / 1000, streetDensity: roadLen / 1000 / (meta.world.area / 1e6), roadShare: roadArea / meta.world.area,
+    densityPerHa: cs.population / (meta.world.area / 1e4), tallest: buildings.reduce((m, b) => Math.max(m, b.floors), 0),
+    maxSlenderness: buildings.reduce((m, b) => (b.shape === 'dome' || b.shape === 'terrace' ? m : Math.max(m, b.h / Math.min(b.w, b.d))), 0) };
+  sub.checks = checksFor(sub.meta, sub.stats);
+  const stats = { year, ...cs, roadSegments: roads.length };
+  return { year, layout: sub, infra: inf, stats };
+}
+
+// The city as it stood at `year` of a growth that completes the plan at `horizon` years. Equal to the keyframe
+// simulate(layout, { years: horizon }) gives at that year, for any year, not only the keyframe years.
+export function cityAt(layout, opts = {}) {
+  const show = (v) => (typeof v === 'string' ? JSON.stringify(v) : String(v));
+  const horizon = opts.horizon === undefined ? 100 : opts.horizon, y = opts.year;
+  if (typeof horizon !== 'number' || !Number.isFinite(horizon) || horizon < 5) throw new Error(`cityAt: horizon must be a number of years, 5 or more (got ${show(horizon)})`);
+  if (typeof y !== 'number' || !Number.isFinite(y)) throw new Error(`cityAt: year must be a number (got ${show(y)}; horizon ${horizon})`);
+  const year = Math.round(10 * y) / 10;
+  if (!(year > 0 && year <= horizon)) throw new Error(`cityAt: year ${y} is outside the growth: it must be above 0 and at most the horizon, ${horizon}`);
+  const sched = schedule(layout, { years: horizon });
+  try { return frameAt(layout, sched, year); }
+  catch (e) { throw new Error(`cityAt: the city at year ${year} of ${horizon} could not be built: ${e.message}`); }
+}
+
+// keyframes: complete cities at K years, networks rebuilt for what exists
+export function simulate(layout, opts = {}) {
+  const K = Math.max(2, Math.min(24, Number(opts.keyframes ?? 8)));
+  const sched = schedule(layout, opts);
+  const { years, history, chord } = sched;
+  const eraOf = (b) => (chord ? b.era ?? 0 : 0);
   const keyframes = [];
   const events = [];
   let prevStats = null;
   for (let k = 0; k < K; k++) {
     // keyframes at even steps of time: the early frames are the small town the city grew from
     const year = k === K - 1 ? years : Math.round(10 * (years * (k + 1)) / K) / 10;
-    const buildings = [];
-    for (const h of history) {
-      if (h.built > year) continue;
-      let g = h.generations[0];
-      for (const gg of h.generations) if (gg.year <= year) g = gg;
-      const b = layout.buildings[h.building];
-      buildings.push({ ...b, floors: g.floors, h: b.shape === 'dome' ? Math.min(g.h, 0.6 * Math.min(b.w, b.d)) : g.h, built: h.built, rebuilt: g.year, source: h.building });
-    }
-    // a later voice's street that an older route opened early was built by the voice of its day: credit it to that
-    // voice, and keep whose sand lines it follows
-    const builtBy = (y) => { let e = 0; eraStart.forEach((ys, k) => { if (ys != null && ys <= y) e = Math.max(e, k); }); return e; };
-    const roads = [];
-    layout.roads.forEach((rd, i) => {
-      if (roadYear[i] > year) return;
-      const e = chord ? rd.era ?? 0 : 0;
-      if (e > 0 && roadYear[i] < (eraStart[e] ?? Infinity)) roads.push({ ...rd, era: builtBy(roadYear[i]), follows: e });
-      else roads.push(rd);
-    });
-    const trees = layout.trees;
-    const sub = { meta: { ...meta, year }, roads, buildings, trees, stats: { ...layout.stats }, checks: [] };
-    const inf = buildInfrastructure(sub);
-    sub.infra = inf;
-    const roadLen = roads.reduce((a, rd) => a + dist(rd.a, rd.b), 0), roadArea = roads.reduce((a, rd) => a + dist(rd.a, rd.b) * rd.w, 0);
-    const cs = cityStats(sub);
-    sub.stats = { ...layout.stats, ...cs, roadSegments: roads.length, roadLengthKm: roadLen / 1000, streetDensity: roadLen / 1000 / (meta.world.area / 1e6), roadShare: roadArea / meta.world.area,
-      densityPerHa: cs.population / (meta.world.area / 1e4), tallest: buildings.reduce((m, b) => Math.max(m, b.floors), 0),
-      maxSlenderness: buildings.reduce((m, b) => (b.shape === 'dome' || b.shape === 'terrace' ? m : Math.max(m, b.h / Math.min(b.w, b.d))), 0) };
-    sub.checks = checksFor(sub.meta, sub.stats);
-    const stats = { year, ...cs, roadSegments: roads.length };
-    keyframes.push({ year, layout: sub, infra: inf, stats });
+    const frame = frameAt(layout, sched, year), { stats, infra: inf } = frame;
+    keyframes.push(frame);
     opts.onKeyframe?.(k, { year, stats }, keyframes[k]);
     const replaced = history.filter((h) => h.generations.some((g, i) => i > 0 && g.year <= year && g.year > (keyframes[k - 1]?.year ?? -1))).length;
     const built = history.filter((h) => h.built <= year && h.built > (keyframes[k - 1]?.year ?? -1)).length;
@@ -263,7 +297,7 @@ export function simulate(layout, opts = {}) {
     eraStarts = layout.meta.chord.map((v, e) => { let first = Infinity; history.forEach((h) => { if (eraOf(layout.buildings[h.building]) === e) first = Math.min(first, h.built); }); return { era: e, hz: v.hz, year: Number.isFinite(first) ? first : null }; });
     for (const ev of events) for (const es of eraStarts) if (es.year != null && es.era > 0 && es.year <= ev.year && es.year > (events[events.indexOf(ev) - 1]?.year ?? -1)) ev.note += `, voice ${es.era + 1} (${Math.round(es.hz)} Hz) breaks ground`;
   }
-  return { years, founding: { building: fb, node: founding }, history, keyframes, events, eraStarts };
+  return { years, founding: sched.founding, history, keyframes, events, eraStarts };
 }
 function describeKeyframe(k, built, replaced, s, prev) {
   const bits = [`${built} built`];
@@ -302,7 +336,7 @@ export function flows(layout, infra, hour = 8, opts = {}) {
       for (const m of children.get(u) ?? []) {
         const child = m.tree[0];
         const Q = ((m.distFlow ?? m.flow) / 3.0) * fw; // distribution peak-hour (3×) design flow
-        const hf = hazenWilliams(Q, m.diameter, m.length, C) / (m.barrels ?? 1) ** 1.852;
+        const hf = hazenWilliams(Q, m.diameter, m.length, C) / DM.pow(m.barrels ?? 1, 1.852);
         head[child] = head[u] + elev(u) - elev(child) - hf;
         if (prvAt.has(child)) head[child] = Math.min(head[child], prvAt.get(child)); // the valve's set point
         mainsOut.set(m.edge, { edge: m.edge, flow: Q, velocity: Q / ((m.barrels ?? 1) * Math.PI * m.diameter * m.diameter / 4), headLoss: hf });
@@ -364,7 +398,7 @@ export function flows(layout, infra, hour = 8, opts = {}) {
     if (p.forceMain) fullness = 1;
     else {
       const A = Math.PI * p.diameter * p.diameter / 4, R = p.diameter / 4;
-      const Qfull = A * (1 / SEWER.manningN) * Math.pow(R, 2 / 3) * Math.sqrt(p.slope) * Math.sqrt(g);
+      const Qfull = A * (1 / SEWER.manningN) * DM.pow(R, 2 / 3) * Math.sqrt(p.slope) * Math.sqrt(g);
       fullness = partialFlowDepth(Qfull > 0 ? Q / Qfull : 0);
     }
     if (!p.forceMain && fullness > 1) surcharged++;

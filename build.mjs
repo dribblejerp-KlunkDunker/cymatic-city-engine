@@ -6,12 +6,16 @@ const viewer = readFileSync(new URL('./src/viewer.html', import.meta.url), 'utf8
 if (/<\/script/i.test(engine + infra + readFileSync(new URL('./src/simulation.js', import.meta.url), 'utf8') + readFileSync(new URL('./src/people.js', import.meta.url), 'utf8'))) throw new Error('sources must not contain a closing script tag');
 // The infrastructure module shares helper names with the engine, so it is wrapped in its own scope.
 const INFRA_EXPORTS = ['buildInfrastructure', 'buildStreetGraph', 'infraToOBJ', 'underground', 'foundationDepth', 'sewerMinSlope', 'dijkstra', 'SEWER', 'WATER', 'POWER', 'TRANSIT', 'UTILIDOR'];
-const combined = engine.replace(/^export /gm, '') + '\n' +
+// Deterministic math comes first: every stage calls DM.sin, DM.exp … so the page and Node agree to the bit.
+const detmath = readFileSync(new URL('./src/detmath.js', import.meta.url), 'utf8');
+if (/<\/script/i.test(detmath)) throw new Error('sources must not contain a closing script tag');
+const combined = `const { DM } = (() => {\n${detmath.replace(/^export /gm, '')}\nreturn { DM };\n})();\n` +
+  engine.replace(/^import .*$/gm, '').replace(/^export /gm, '') + '\n' +
   `const { ${INFRA_EXPORTS.join(', ')} } = (() => {\n` +
   infra.replace(/^import .*$/gm, '').replace(/^export /gm, '') +
   `\nreturn { ${INFRA_EXPORTS.join(', ')} };\n})();\n`;
 const sim = readFileSync(new URL('./src/simulation.js', import.meta.url), 'utf8');
-const SIM_EXPORTS = ['simulate', 'flows', 'impact', 'resilience', 'cityStats', 'PROFILES', 'PEAK_HOUR', 'GROWTH', 'LIFETIMES', 'hazenWilliams', 'voltageDrop', 'partialFlowDepth', 'cableFor'];
+const SIM_EXPORTS = ['simulate', 'schedule', 'frameAt', 'cityAt', 'flows', 'impact', 'resilience', 'cityStats', 'PROFILES', 'PEAK_HOUR', 'GROWTH', 'LIFETIMES', 'hazenWilliams', 'voltageDrop', 'partialFlowDepth', 'cableFor'];
 const combinedAll = combined + '\n' +
   `const { ${SIM_EXPORTS.join(', ')} } = (() => {\n` +
   sim.replace(/^import .*$/gm, '').replace(/^export /gm, '') +
@@ -31,9 +35,17 @@ const combinedAll3 = combinedAll2 + '\n' +
   `const { ${QUERY_BINDINGS.join(', ')} } = (() => {\nconst failImpact = impact, runPeople = people;\n` +
   qry.replace(/^import .*$/gm, '').replace(/^export \{.*\};?$/gm, '').replace(/^export /gm, '') +
   `\nreturn { ${QUERY_EXPORTS.join(', ')} };\n})();\n`;
+// exchange formats (glTF, GeoJSON, CityJSON): the page's Save writes them
+const exp = readFileSync(new URL('./src/export.js', import.meta.url), 'utf8');
+const EXPORT_EXPORTS = ['toGLB', 'toGLTF', 'toGeoJSON', 'toCityJSON', 'geoProjector', 'unitBuildingMesh', 'EXPORT_COLORS'];
+if (/<\/script/i.test(exp)) throw new Error('sources must not contain a closing script tag');
+const combinedAll4 = combinedAll3 + '\n' +
+  `const { ${EXPORT_EXPORTS.join(', ')} } = (() => {\n` +
+  exp.replace(/^import .*$/gm, '').replace(/^export /gm, '') +
+  `\nreturn { ${EXPORT_EXPORTS.join(', ')} };\n})();\n`;
 const out = viewer
-  .replace('@@ENGINE_TEXT@@', () => combinedAll3)
-  .replace('/*@@ENGINE@@*/', () => combinedAll3);
+  .replace('@@ENGINE_TEXT@@', () => combinedAll4)
+  .replace('/*@@ENGINE@@*/', () => combinedAll4);
 mkdirSync(new URL('./dist/', import.meta.url), { recursive: true });
 // artifact page (the host adds doctype, charset and viewport) and a standalone copy that opens anywhere
 writeFileSync(new URL('./dist/cymatic-city.html', import.meta.url), out);

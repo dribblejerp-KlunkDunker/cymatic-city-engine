@@ -50,8 +50,13 @@ test('CLI summary is short, lists only non-passing checks, and export reproduces
   cli('export', ...TOWN, '--out', out);
   assert.equal(readFileSync(out, 'utf8'), toJSON(L));
   // the extension names the format: an unknown one is refused, not written as JSON under another name
-  assert.throws(() => cli('export', ...TOWN, '--out', join(dir, 'city.glb')), /writes \.json and \.obj/);
-  assert.equal(existsSync(join(dir, 'city.glb')), false);
+  // an extension that names no format is refused, not written as JSON under another name
+  assert.throws(() => cli('export', ...TOWN, '--out', join(dir, 'city.fbx')), /no format this command writes/);
+  assert.equal(existsSync(join(dir, 'city.fbx')), false);
+  assert.throws(() => cli('generate', ...TOWN, '--out', join(dir, 'city.json'), '--format', 'fbx'), /--format must be one of/);
+  // --format names the format when the extension does not
+  cli('generate', ...TOWN, '--out', join(dir, 'city.data'), '--format', 'json');
+  assert.equal(readFileSync(join(dir, 'city.data'), 'utf8'), toJSON(L));
 });
 
 test('CLI --infra reports the networks, their checks, and --strict judges what it looked at', () => {

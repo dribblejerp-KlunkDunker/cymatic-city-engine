@@ -1,5 +1,5 @@
 <!--
-  Evaluation set for the cymatic MCP server (bin/cymatic-mcp.mjs), engine 1.5.0.
+  Evaluation set for the cymatic MCP server (bin/cymatic-mcp.mjs), engine 1.6.0 (recomputed after the move to deterministic math: all ten unchanged).
   Answers were computed directly with query() on the same profiles; the engine is deterministic, so they stay
   valid until the engine version changes. Each question needs generate_city plus at least one more call.
   Defaults unless stated: plate circle, preset city, seed 1, Q 100.
