@@ -158,6 +158,29 @@ review are for the strongest.
   if ward 2 fails", "which nexus feeds the core"); five MCP evaluation questions.
 - README, CHANGELOG, and the independent review in a fresh session. (`ENGINE_VERSION` became 1.7.0 with 7a on sleeves' call; each later stage that changes the contract bumps the patch.)
 
+## As built
+
+**7a (1.7.0).** As specified, plus: `where.at` takes `[x, y, z]` on a sphere; `"all"` cannot share the plan with
+another ward; under a ward that covers part of the plan the water builder zones and splits tanks by the customers
+they serve, as on terrain, and a ward too light for any tank is pumped as the world would be.
+
+**7b (1.7.1).**
+- The nexuses are found in `generateCity`, where the field and its grid exist, and carried as plain data in
+  `meta.magic.ley`: the network stage has only the layout, and year frames keep `meta`.
+- The Gabriel rule uses the closed disc, so four cocircular nexuses keep their sides rather than two crossing
+  diagonals. On every city measured the open and closed rules agree.
+- The default city has 47 lines, not 49. The prototype placed nexuses on its own 240 grid; the refined positions
+  give 47 under either rule.
+- The chord 432 + 540 has 65 nexuses, not 60. The count does not converge with grid resolution (220: 65, 330: 64,
+  440: 73, 660: 75; a 600 grid's 8-neighbour maxima: 74) while supply moves 0.1 %. The difference is peaks sampled
+  just under the cut and pairs closer than three grid cells. The rule stays grid-defined (decision 9); the proof
+  claims "none is missed" for single frequencies, where it holds at every resolution, and for the chord that every
+  nexus is a real maximum and every miss is one of those two kinds.
+- The quadrature uses trapezoid weights on the grid's edge points (a square plate's edge is sampled; without them
+  the square city's output is 1 % high).
+- Each substation's tap is the street node nearest its nexus; the tap nodes join the plant as transmission
+  sources, and no intertie is built once the ley feeds anything.
+
 ## The five calls (approved as recommended, 2026-11-22)
 
 The stages above assume the recommended column. Changing one later changes only the stage named.

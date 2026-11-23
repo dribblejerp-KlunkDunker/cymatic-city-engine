@@ -12,7 +12,7 @@ const read = (p) => readFileSync(new URL(p, root), 'utf8');
 test('every name a module imports from a scoped module is in that module\'s bundle export list', () => {
   const build = read('build.mjs');
   const list = (name) => { const m = build.match(new RegExp(`const ${name} = \\[([^\\]]*)\\]`)); assert.ok(m, name); return new Set([...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1])); };
-  const scoped = { 'infrastructure.js': list('INFRA_EXPORTS'), 'simulation.js': list('SIM_EXPORTS'), 'people.js': list('PEOPLE_EXPORTS'), 'query.js': list('QUERY_EXPORTS'), 'export.js': list('EXPORT_EXPORTS') };
+  const scoped = { 'infrastructure.js': list('INFRA_EXPORTS'), 'simulation.js': list('SIM_EXPORTS'), 'people.js': list('PEOPLE_EXPORTS'), 'query.js': list('QUERY_EXPORTS'), 'export.js': list('EXPORT_EXPORTS'), 'ley.js': list('LEY_EXPORTS') };
   const missing = [];
   for (const file of readdirSync(new URL('src/', root)).filter((f) => f.endsWith('.js'))) {
     for (const [, names, from] of read(`src/${file}`).matchAll(/^import \{([^}]*)\} from '\.\/([^']+)';$/gm)) {

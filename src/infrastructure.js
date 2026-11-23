@@ -4,6 +4,7 @@
 // arcologies. Pure data in, pure data out; the viewer draws it and the tests check it.
 import { mulberry32 } from './cymatic-engine.js';
 import { DM } from './detmath.js';
+import { buildLey, LEY } from './ley.js';
 
 const G0 = 9.80665;
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -647,13 +648,21 @@ export function buildInfrastructure(layout) {
         return score(i) > score(m) ? i : m;
       }, siteCandidates[0]);
     const peakMW = peakMVA * POWER.powerFactor;
-    const plants = [{ node: plantNode, pos: graph.nodes[plantNode].pos, capacityMW: Math.ceil((peakMW * 1.25) / 50) * 50, kind: arcology || base === 'alien' ? 'core reactor' : 'power station' }];
+    const plantKind = arcology || base === 'alien' ? 'core reactor' : 'power station';
+    // ley (magic): every substation taps its nearest nexus and the lines balance the rest; the plant is built only for
+    // what the ley cannot deliver, and its taps feed the street transmission as the plant does. With nothing tapped
+    // (flux 0, say) the grid is the realistic one, byte for byte.
+    const ley = layout.meta.magic?.ley ? buildLey(layout, { substations, powerFactor: POWER.powerFactor, nearestNode }) : null;
+    const leyFed = !!ley?.taps.length;
+    const plants = leyFed
+      ? (ley.plantMW > 0 ? [{ node: plantNode, pos: graph.nodes[plantNode].pos, capacityMW: ley.plantMW, kind: plantKind }] : [])
+      : [{ node: plantNode, pos: graph.nodes[plantNode].pos, capacityMW: Math.ceil((peakMW * 1.25) / 50) * 50, kind: plantKind }];
     // a second injection point (grid intertie) on the far side, so one trench never isolates the whole city
-    if (substations.length >= 2 && siteCandidates.length > 1) {
+    if (!leyFed && substations.length >= 2 && siteCandidates.length > 1) {
       const far = siteCandidates.reduce((m, i) => (dist(graph.nodes[i].pos, graph.nodes[plantNode].pos) > dist(graph.nodes[m].pos, graph.nodes[plantNode].pos) ? i : m), siteCandidates[0]);
       if (far !== plantNode) plants.push({ node: far, pos: graph.nodes[far].pos, capacityMW: Math.ceil((peakMW * 0.6) / 50) * 50, kind: 'grid intertie' });
     }
-    const sources = plants.map((p) => p.node);
+    const sources = leyFed ? [...new Set([...plants.map((p) => p.node), ...ley.taps.map((t) => t.node)])] : plants.map((p) => p.node);
     // transmission: logical lines between the plant and substations, each realised along street edges.
     // Start from the shortest-path tree (lines share corridors toward the plant), then add backup lines
     // until no single line strands more than N1_TARGET of the people, as a meshed 110 kV grid would.
@@ -742,8 +751,10 @@ export function buildInfrastructure(layout) {
     const n1 = transmission.length ? Math.max(...transmission.map((t) => t.n1)) : 0;
     const nodeFeeder = new Int32Array(N).fill(-1);
     for (let i = 0; i < N; i++) if (forest.src[i] >= 0) nodeFeeder[i] = forest.src[i];
-    return { plants, sources, substations, feeders, transmission, lines, n1Transmission: n1, nodeFeeder, peakMW, peakMVA };
+    return { plants, sources, substations, feeders, transmission, lines, n1Transmission: n1, nodeFeeder, peakMW, peakMVA, ley };
   })();
+  const ley = power.ley;
+  delete power.ley;
 
   // ---- transit: stations at the strongest building of each district, tunnels along an MST of street paths
   const transit = (() => {
@@ -895,6 +906,17 @@ export function buildInfrastructure(layout) {
   }
   check('grid-n1', 'Worst transmission corridor', `${(power.n1Transmission * 100).toFixed(0)} % of people stranded`,
     power.n1Transmission <= 0.2 + 1e-9 ? 'pass' : power.substations.length < 3 ? 'info' : 'warn', 'Backup lines added until one trench strands no more than 20 %; arcologies with few corridors may not get there');
+  if (ley) {
+    const need = ley.demandMW * LEY.plantMargin, ratio = need > 0 ? ley.supplyMW / need : Infinity;
+    const worst = ley.lines.reduce((m, l) => Math.max(m, l.capacityMW > 0 ? l.loadMW / l.capacityMW : l.loadMW > 1e-9 ? Infinity : 0), 0);
+    check('ley-supply', 'Ley supply vs. peak demand', `${ley.supplyMW.toFixed(0)} MW from ${ley.nexuses.length} nexus${ley.nexuses.length === 1 ? '' : 'es'} for ${ley.demandMW.toFixed(0)} MW peak: ${Number.isFinite(ratio) ? ratio.toFixed(2) : '∞'} × (with the 25 % margin)${ley.undeliveredMW > 1e-6 ? `; ${ley.undeliveredMW.toFixed(0)} MW undelivered, a ${ley.plantMW} MW plant covers it` : ''}`,
+      ratio >= 1 - 1e-9 ? 'pass' : 'warn', `${ley.flux} W/m² × ∫S² dA over each nexus's cell; below 1 the plant is built for the shortfall, so this never fails`);
+    check('ley-line-load', 'Busiest ley line', `${(worst * 100).toFixed(0)} % of capacity, ${ley.lines.length} line${ley.lines.length === 1 ? '' : 's'}`, worst <= 1 + 1e-9 ? 'pass' : 'fail',
+      `Gabriel lines between nexuses, each up to ${layout.meta.magic.ley.lineFactor} × its weaker end's output`);
+    const lost = ley.n1.kind === 'nexus' ? 'the strongest nexus' : ley.n1.kind === 'line' ? `the busiest ley line (${ley.n1.index + 1})` : 'a nexus (there are none)';
+    check('ley-n1', 'Worst ley loss', `${(ley.n1.share * 100).toFixed(0)} % of people stranded by losing ${lost}`, ley.n1.share <= LEY.n1Warn + 1e-9 ? 'pass' : 'warn',
+      'The strongest nexus or the busiest line lost, the rest rebalanced; what the plant cannot cover is stranded, people in proportion to load');
+  }
   check('substation-load', 'Most loaded substation', `${(maxSubLoad * 100).toFixed(0)}% of rating`, maxSubLoad <= 1 ? 'pass' : 'fail', `Zones split until every substation is under its ${POWER.substationMVA[base] ?? 60} MVA rating`);
   if (transit.tunnels.length) {
     check('tunnel-clearance', 'Tunnel clearance under foundations', `${minTunnelClear.toFixed(1)} m`, minTunnelClear >= TRANSIT.clearance - 1e-6 ? 'pass' : 'fail', `Piles ≈ 2 m + 10 % of height; ${TRANSIT.clearance} m clearance (Singapore case histories 4.5–9 m)`);
@@ -903,7 +925,8 @@ export function buildInfrastructure(layout) {
     check('tunnel-clearance', 'Metro', town ? 'none (town)' : 'none', 'info', 'Towns do not get a metro');
   }
   layout.infraToOBJ = infraToOBJ;
-  return { graph, laterals, sewer, water, power, transit, utilidors, stats, checks };
+  if (ley) stats.ley = { nexuses: ley.nexuses.length, lines: ley.lines.length, supplyMW: ley.supplyMW, demandMW: ley.demandMW, undeliveredMW: ley.undeliveredMW, plantMW: ley.plantMW };
+  return { graph, laterals, sewer, water, power, transit, utilidors, stats, checks, ...(ley ? { ley } : null) };
 }
 
 // ---------------------------------------------------------------- export helpers

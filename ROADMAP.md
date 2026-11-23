@@ -79,7 +79,7 @@ Proof: exported files validate in their reference validators; round-trip of a pr
 
 ## Phase 7 — Fantasy as mechanics
 
-Spec with measurements and decisions: `docs/PHASE7-SPEC.md` (stages 7a wards, 7b ley, 7c layers and catacombs, 7d deeps, 7e wiring and review). sleeves approved its five calls as recommended on 2026-11-22. **7a (wards) built** on branch `claude/phase7a-wards`: `magic.wards`, per-ward limits and networks, `layout.wards[].dependent`, `impact({ kind: 'ward' })` (CHANGELOG 1.7.0). Next: 7b ley.
+Spec with measurements and decisions: `docs/PHASE7-SPEC.md` (stages 7a wards, 7b ley, 7c layers and catacombs, 7d deeps, 7e wiring and review). sleeves approved its five calls as recommended on 2026-11-22. **7a (wards) built** on branch `claude/phase7a-wards`: `magic.wards`, per-ward limits and networks, `layout.wards[].dependent`, `impact({ kind: 'ward' })` (CHANGELOG 1.7.0). **7b (ley) built** on `claude/phase7b-ley`: `magic.ley`, nexuses, Gabriel lines with capacity, taps, a plant only for the shortfall (CHANGELOG 1.7.1). Next: 7c layers and catacombs.
 
 Themes currently rename and recolour. Next: ley lines as a real network with capacity and nodes; per-district physics overrides (gravity, material strength, pressure) as wards; underworld layers below the utilities (catacombs, deeps) with their own access rules; magical power sources as plants with different siting rules. Same engine, different constants and extra layers, all reported honestly by the checks.
 

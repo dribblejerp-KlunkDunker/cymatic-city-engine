@@ -42,7 +42,9 @@ const WORK = `async (base, sha) => {
   const [D, E, I, S, P, X, Q] = await Promise.all(['detmath', 'cymatic-engine', 'infrastructure', 'simulation', 'people', 'export', 'query'].map((m) => import(base + '/src/' + m + '.js')));
   const out = { fingerprint: D.fingerprint() };
   const cities = { town: { frequency: 432, preset: 'town' }, chord: { chord: [432, 540], preset: 'town' }, relief: { frequency: 432, preset: 'town', terrain: 'relief' },
-    valleys: { frequency: 528, preset: 'town', terrain: 'valleys', plate: 'square' }, sphere: { frequency: 300, preset: 'town', plate: 'sphere' }, alien: { frequency: 300, preset: 'alien', seed: 3 } };
+    valleys: { frequency: 528, preset: 'town', terrain: 'valleys', plate: 'square' }, sphere: { frequency: 300, preset: 'town', plate: 'sphere' }, alien: { frequency: 300, preset: 'alien', seed: 3 },
+    wards: { frequency: 432, preset: 'town', magic: { wards: [{ where: { polarity: 1 }, gravity: 0.5, height: 2 }, { where: { at: [60, -40] }, pressure: 0.7 }] } },
+    ley: { frequency: 432, preset: 'town', plate: 'square', magic: { ley: true } }, 'ley sphere': { frequency: 300, preset: 'town', plate: 'sphere', magic: { ley: { flux: 200 } } } };
   for (const [name, p] of Object.entries(cities)) {
     const L = E.generateCity(p);
     out[name + ' layout'] = await sha(E.toJSON(L));
