@@ -79,6 +79,8 @@ Proof: exported files validate in their reference validators; round-trip of a pr
 
 ## Phase 7 — Fantasy as mechanics
 
+Spec with measurements and decisions: `docs/PHASE7-SPEC.md` (stages 7a wards, 7b ley, 7c layers and catacombs, 7d deeps, 7e wiring and review). sleeves approved its five calls as recommended on 2026-11-22.
+
 Themes currently rename and recolour. Next: ley lines as a real network with capacity and nodes; per-district physics overrides (gravity, material strength, pressure) as wards; underworld layers below the utilities (catacombs, deeps) with their own access rules; magical power sources as plants with different siting rules. Same engine, different constants and extra layers, all reported honestly by the checks.
 
 Proof: a fantasy profile with Earth constants reproduces the realistic city; every extra layer obeys the clearance and overlap rules of the layers above it.
