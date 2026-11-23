@@ -175,7 +175,7 @@ test('refusals: each names what is wrong', () => {
   refuse({ wards: [{ where: 'all', gravity: 0.5 }, { where: { district: 0 }, strength: 2 }] }, /covers everything/);
   refuse({ wards: [{ where: 'all', gravity: -1 }] }, /gravity must be a multiplier above 0/);
   refuse({ wards: [{ where: 'all', gravty: 0.5 }] }, /unknown key "gravty"/);
-  refuse({ ley: true }, /magic\.ley is not built.*stage 7b/);
+  refuse({ ley: { flux: -1 } }, /magic\.ley\.flux must be a flux/);
   refuse({ underworld: { catacombs: true } }, /magic\.underworld is not built.*stage 7c/);
   refuse({ wardz: [] }, /Unknown magic key "wardz"/);
   refuse([1], /magic must be an object/);
