@@ -24,6 +24,7 @@
     "mcp": "node bin/cymatic-mcp.mjs",
     "test:detmath": "node --test --test-reporter=./test/quiet-reporter.mjs test/detmath.test.mjs",
     "test:bundle": "node --test --test-reporter=./test/quiet-reporter.mjs test/bundle.test.mjs",
+    "test:ley": "node --test --test-reporter=./test/quiet-reporter.mjs test/ley.test.mjs",
     "test:wards": "node --test --test-reporter=./test/quiet-reporter.mjs test/wards.test.mjs",
     "test:page": "node --test --test-reporter=./test/quiet-reporter.mjs test/page.test.mjs"
   },

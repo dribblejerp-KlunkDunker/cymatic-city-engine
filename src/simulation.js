@@ -592,7 +592,8 @@ export function impact(layout, infra, asset) {
     const pl = infra.power.plants[index];
     const lost = strandedSubstations(infra, new Set(), new Set([pl.node]));
     const a = infra.laterals.filter((l) => lost.has(infra.power.nodeFeeder[l.node]));
-    const remaining = infra.power.plants.filter((_, i) => i !== index).reduce((s, p) => s + p.capacityMW, 0);
+    // with the ley on, what the nexuses deliver keeps flowing when the plant is out
+    const remaining = infra.power.plants.filter((_, i) => i !== index).reduce((s, p) => s + p.capacityMW, 0) + (infra.ley?.deliveredMW ?? 0);
     const short = Math.max(0, infra.power.peakMW - remaining);
     return done(a, short > 0 ? infra.laterals.filter((l) => !lost.has(infra.power.nodeFeeder[l.node])) : [], { shortfallMW: short },
       infra.power.plants.length > 1

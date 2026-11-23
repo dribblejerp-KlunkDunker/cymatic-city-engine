@@ -106,14 +106,15 @@ export function findNexuses(spec, grid, dom, at) {
     found.push({ pos: P, sign: spec.field ? 1 : at(u, v).S >= 0 ? 1 : -1, strength: Math.sqrt(best / lmax) });
   }
   found.sort((a, b) => b.strength - a.strength || a.pos[0] - b.pos[0] || a.pos[2] - b.pos[2] || a.pos[1] - b.pos[1]);
-  // outputs: each distinct grid point's ℓ goes to its nearest nexus (ties to the lower index); a sphere weights by sin θ.
+  // outputs: each distinct grid point's ℓ goes to its nearest nexus (ties to the lower index); a sphere weights by sin θ,
   // The quadrature is normalised to the plate's exact area.
   const cell = new Float64Array(found.length);
   let wsum = 0;
   for (let i = 0; i <= ni; i++) for (let j = 0; j <= nj; j++) {
     const k = i * W + j;
     if (!live[k]) continue;
-    const [u, v] = coord(i, j), w = sphere ? DM.sin(u) : 1;
+    // trapezoid weights: a grid point on the edge of the sampled square covers half a cell (a corner a quarter)
+    const [u, v] = coord(i, j), w = sphere ? DM.sin(u) : (i === 0 || i === ni ? 0.5 : 1) * (j === 0 || j === nj ? 0.5 : 1);
     wsum += w;
     if (!found.length || !(w > 0)) continue;
     const P = dom.toWorld(u, v);
@@ -213,6 +214,6 @@ export function buildLey(layout, { substations, powerFactor, nearestNode }) {
   if (nexuses.length) cases.push({ kind: 'nexus', index: 0, share: strandedBy(out.map((o, i) => (i === 0 ? 0 : o)), lines) });
   const busiest = lines.reduce((m, l, i) => (l.loadMW > 1e-9 && (m < 0 || l.loadMW > lines[m].loadMW) ? i : m), -1);
   if (busiest >= 0) cases.push({ kind: 'line', index: busiest, share: strandedBy(out, lines.map((l, i) => (i === busiest ? { ...l, capacityMW: 0 } : l))) });
-  const n1 = cases.reduce((m, c) => (c.share > m.share ? c : m), { kind: 'none', index: -1, share: 0 });
+  const n1 = cases.reduce((m, c) => (c.share > m.share ? c : m), cases[0] ?? { kind: 'none', index: -1, share: 0 });
   return { flux, nexuses, lines, taps, supplyMW, demandMW, deliveredMW: delivered, undeliveredMW, plantMW, n1 };
 }

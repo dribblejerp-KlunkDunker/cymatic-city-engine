@@ -5,6 +5,7 @@
 // Pure JavaScript, no dependencies; runs in the browser and in Node.
 
 import { DM } from './detmath.js';
+import { resolveLey, findNexuses } from './ley.js';
 
 export const ENGINE_VERSION = '1.7.0';
 const TAU = Math.PI * 2;
@@ -452,12 +453,14 @@ const WARD_MULTIPLIERS = ['gravity', 'strength', 'pressure', 'height'];
 function resolveMagic(m, gravity) {
   if (m == null || m === false) return null;
   if (typeof m !== 'object' || Array.isArray(m)) throw new Error('magic must be an object: { wards: [ … ] }');
+  let ley = null;
   for (const k of Object.keys(m)) {
     if (k === 'wards') continue;
+    if (k === 'ley') { if (m.ley != null && m.ley !== false) ley = resolveLey(m.ley); continue; }
     // off is nothing: `ley: false`, and an `underworld` that is false or has every layer off (`{}` included)
     const v = m[k], off = v == null || v === false || (k === 'underworld' && typeof v === 'object' && !Array.isArray(v) && Object.values(v).every((x) => x == null || x === false));
-    if ((k === 'ley' || k === 'underworld') && off) continue;
-    throw new Error(k === 'ley' || k === 'underworld' ? `magic.${k} is not built in engine ${ENGINE_VERSION} (wards only so far; it comes with Phase 7 stage ${k === 'ley' ? '7b' : '7c'})` : `Unknown magic key "${k}" (wards, ley, underworld)`);
+    if (k === 'underworld' && off) continue;
+    throw new Error(k === 'underworld' ? `magic.underworld is not built in engine ${ENGINE_VERSION} (wards and ley so far; it comes with Phase 7 stage 7c)` : `Unknown magic key "${k}" (wards, ley, underworld)`);
   }
   const wards = [];
   if (m.wards != null) {
@@ -478,7 +481,8 @@ function resolveMagic(m, gravity) {
       wards.push(out);
     });
   }
-  return wards.length ? { wards } : null;
+  if (!wards.length && !ley) return null;
+  return { ...(wards.length ? { wards } : null), ...(ley ? { ley } : null) };
 }
 function resolveWhere(where, at) {
   const bad = () => new Error(`${at}: unknown "where" ${JSON.stringify(where) ?? 'undefined'} (use "all", { "district": n }, { "at": [x, z] } or { "polarity": 1 | -1 })`);
@@ -1168,6 +1172,8 @@ export function generateCity(input = {}) {
   const dom = makeDomain(p);
   const grid = sampleGrid(dom, field);
   const districts = labelDistricts(grid);
+  // ley (magic): the nexuses and their outputs come from the field alone, so they are found here and ride in meta
+  const leyFound = p.magic?.ley ? findNexuses(p.magic.ley, grid, dom, field.at) : null;
   let rd;
   if (!voices) rd = buildRoads(p, dom, field, grid);
   else {
@@ -1211,7 +1217,7 @@ export function generateCity(input = {}) {
 
   // wards (magic): each covers whole districts and brings its own gravity, strength and height; a ward's limits
   // are the world's formulas at the ward's values. Without wards none of this runs.
-  const wardPlan = p.magic ? placeWards(p.magic.wards, dom, districts, districtAt) : null;
+  const wardPlan = p.magic?.wards ? placeWards(p.magic.wards, dom, districts, districtAt) : null;
   const wardLimits = wardPlan && p.magic.wards.map((w) => {
     const g = p.gravity * w.gravity, hL = heightLimit(p.materialSpec, g) * w.strength, sL = pr.arcology ? Infinity : slendernessLimit(pr.slender, g);
     return { g, hLimit: hL, sLimit: sL, hMat: p.enforce ? hL : Infinity, slender: p.enforce ? sL : Infinity, height: w.height };
@@ -1569,7 +1575,7 @@ export function generateCity(input = {}) {
       azimuthal: p.azimuthal, sharpness: resp.sharpness,
       chord: voices ? voices.map((v) => ({ hz: v.hz, weight: v.weight, note: noteName(v.hz), dominant: modeLabel(v.resp.active[0]), sharpness: v.resp.sharpness, modes: v.resp.active.map((m) => ({ label: modeLabel(m), f: m.f, weight: m.weight, detuneHz: m.detuneHz })) })) : null,
       terrain: { mode: terrain.mode, relief: terrain.relief, waterLevel: Number.isFinite(terrain.waterLevel) ? terrain.waterLevel : null, freeboard: terrain.shore, canals: p.terrain.canals, heightmap: p.terrain.heightmap ? { width: p.terrain.heightmap.width, height: p.terrain.heightmap.height } : null },
-      ...(wardInfo ? { magic: { wards: wardInfo.wards.map((w) => ({ where: w.where, districts: w.districts, gravity: w.gravity, strength: w.strength, pressure: w.pressure, height: w.height })) } } : null),
+      ...magicMeta(wardInfo, p.magic?.ley, leyFound),
     },
     roads: rd.roads,
     buildings,
@@ -1587,6 +1593,14 @@ function symmetryNote(md) {
   if (md.plate === 'circle') return `${md.m} nodal diameter${md.m === 1 ? '' : 's'} and ${md.n} nodal circle${md.n === 1 ? '' : 's'} (rim included)`;
   if (md.plate === 'square') return `${md.m}×${md.n} lattice, ${md.sign > 0 ? 'centre-driven (+)' : 'off-centre (−)'} combination`;
   return `${md.l} nodal circles on the sphere: ${md.m} meridian${md.m === 1 ? '' : 's'} and ${md.l - md.m} latitude ring${md.l - md.m === 1 ? '' : 's'}`;
+}
+
+// meta.magic: what resolved, and nothing when nothing did
+function magicMeta(wardInfo, ley, found) {
+  const out = {};
+  if (wardInfo) out.wards = wardInfo.wards.map((w) => ({ where: w.where, districts: w.districts, gravity: w.gravity, strength: w.strength, pressure: w.pressure, height: w.height }));
+  if (ley) out.ley = { flux: ley.flux, nexusStrength: ley.nexusStrength, lineFactor: ley.lineFactor, field: ley.field ? 'grid' : 'plate', supplyMW: found.supplyMW, nexuses: found.nexuses };
+  return Object.keys(out).length ? { magic: out } : null;
 }
 
 // What each ward covers and what stands only while it holds. `statics` are the wards' fixed fields (where,

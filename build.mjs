@@ -8,8 +8,13 @@ if (/<\/script/i.test(engine + infra + readFileSync(new URL('./src/simulation.js
 const INFRA_EXPORTS = ['buildInfrastructure', 'buildStreetGraph', 'infraToOBJ', 'underground', 'foundationDepth', 'sewerMinSlope', 'wardGravity', 'dijkstra', 'SEWER', 'WATER', 'POWER', 'TRANSIT', 'UTILIDOR'];
 // Deterministic math comes first: every stage calls DM.sin, DM.exp … so the page and Node agree to the bit.
 const detmath = readFileSync(new URL('./src/detmath.js', import.meta.url), 'utf8');
+// the ley sits in its own scope after the math, before the engine that finds its nexuses
+const ley = readFileSync(new URL('./src/ley.js', import.meta.url), 'utf8');
+if (/<\/script/i.test(ley)) throw new Error('sources must not contain a closing script tag');
+const LEY_EXPORTS = ['LEY', 'resolveLey', 'findNexuses', 'gabriel', 'buildLey', 'leyPlantMW'];
 if (/<\/script/i.test(detmath)) throw new Error('sources must not contain a closing script tag');
 const combined = `const { DM } = (() => {\n${detmath.replace(/^export /gm, '')}\nreturn { DM };\n})();\n` +
+  `const { ${LEY_EXPORTS.join(', ')} } = (() => {\n${ley.replace(/^import .*$/gm, '').replace(/^export /gm, '')}\nreturn { ${LEY_EXPORTS.join(', ')} };\n})();\n` +
   engine.replace(/^import .*$/gm, '').replace(/^export /gm, '') + '\n' +
   `const { ${INFRA_EXPORTS.join(', ')} } = (() => {\n` +
   infra.replace(/^import .*$/gm, '').replace(/^export /gm, '') +
