@@ -156,7 +156,7 @@ review are for the strongest.
 - Exports: glTF groups `ley`, `catacombs`, `deeps`; GeoJSON kinds; CityJSON unchanged.
 - Queries: collections `wards`, `nexuses`, `leyLines`, `galleries`, `deepRoads`; `ask` templates ("what falls
   if ward 2 fails", "which nexus feeds the core"); five MCP evaluation questions.
-- `ENGINE_VERSION` 1.7.0, README, CHANGELOG, and the independent review in a fresh session.
+- README, CHANGELOG, and the independent review in a fresh session. (`ENGINE_VERSION` became 1.7.0 with 7a on sleeves' call; each later stage that changes the contract bumps the patch.)
 
 ## The five calls (approved as recommended, 2026-11-22)
 

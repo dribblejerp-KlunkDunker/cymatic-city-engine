@@ -290,6 +290,36 @@ export function buildStreetGraph(layout) {
   return { nodes, edges, adj: adj2, connectors };
 }
 
+// ---------------------------------------------------------------- wards
+// Gravity at a street node, and the gravity the water head rules see there (a ward's `pressure` multiplies the
+// head a pressure needs, so it divides the gravity those rules use). The world's value unless the node is warded.
+export function wardGravity(meta) {
+  const g = meta.gravity ?? 1, wards = meta.magic?.wards;
+  if (!wards?.length) return { g, on: false, gAt: () => g, headGAt: () => g };
+  const gs = wards.map((w) => g * w.gravity), hs = wards.map((w) => (g * w.gravity) / w.pressure);
+  return { g, on: true, gAt: (node) => (node.ward == null ? g : gs[node.ward]), headGAt: (node) => (node.ward == null ? g : hs[node.ward]) };
+}
+// Streets are nodal lines, the borders between districts, so a street node has no district of its own: it takes the
+// ward holding the most floor area among the buildings it serves (a tie goes to no ward, then to the lower index),
+// and a node that serves nothing is unwarded. A ward over everything ("all") holds every node.
+function wardNodes(graph, layout, laterals, areaOf) {
+  const wards = layout.meta.magic?.wards;
+  if (!wards?.length) return;
+  const all = wards.findIndex((w) => w.where === 'all');
+  if (all >= 0) { for (const n of graph.nodes) n.ward = all; return; }
+  const share = graph.nodes.map(() => null);
+  for (const l of laterals) {
+    const w = layout.buildings[l.building].ward ?? -1, m = share[l.node] ?? (share[l.node] = new Map());
+    m.set(w, (m.get(w) ?? 0) + areaOf[l.building]);
+  }
+  share.forEach((m, i) => {
+    if (!m) return;
+    let best = -1, top = m.get(-1) ?? 0;
+    for (let w = 0; w < wards.length; w++) if ((m.get(w) ?? 0) > top) { top = m.get(w); best = w; }
+    if (best >= 0) graph.nodes[i].ward = best;
+  });
+}
+
 // ---------------------------------------------------------------- main entry
 export function buildInfrastructure(layout) {
   const t0 = Date.now();
@@ -306,7 +336,7 @@ export function buildInfrastructure(layout) {
   // cell size follows node density so the nearest-node search stays a few cells wide
   const nodeHash = new PointHash(Math.max(40, 2.5 * Math.sqrt(meta.world.area / Math.max(1, N))));
   graph.nodes.forEach((n, i) => nodeHash.add(n.pos, i));
-  const laterals = [];
+  const laterals = [], areaOf = meta.magic?.wards?.length ? [] : null;
   const resAt = new Float64Array(N), jobsAt = new Float64Array(N), bAt = new Int32Array(N);
   const shapeVolume = { block: 1, house: 1, tower: 1, terrace: 1, pod: 0.785, dome: 0.5, spire: 0.33 };
   const resShare = { residential: 0.9, mixed: 0.5, core: 0.25, green: 0 };
@@ -318,7 +348,16 @@ export function buildInfrastructure(layout) {
     const res = (area * share) / 45, jobs = (area * (1 - share)) / 15;
     resAt[hit[0]] += res; jobsAt[hit[0]] += jobs; bAt[hit[0]]++;
     laterals.push({ building: bi, node: hit[0], length: hit[1], residents: res, jobs });
+    if (areaOf) areaOf[bi] = area;
   });
+  const terrainOn = !!(meta.terrain && meta.terrain.mode !== 'flat');
+  // wards: gravity and head rules are read at the node; without wards these return the world's g
+  wardNodes(graph, layout, laterals, areaOf);
+  const wg = wardGravity(meta), gOf = (i) => wg.gAt(graph.nodes[i] ?? {}), headG = (i) => wg.headGAt(graph.nodes[i] ?? {});
+  // head rules differ from node to node only under a ward that covers part of the plan; then the tanks are sized
+  // and split by the customers they serve, as they are on terrain
+  const headsVary = wg.on && graph.nodes.some((n) => wg.headGAt(n) !== headG(0));
+  const zoned = terrainOn || headsVary;
   const population = resAt.reduce((s, x) => s + x, 0), jobs = jobsAt.reduce((s, x) => s + x, 0);
   const loadNodes = []; for (let i = 0; i < N; i++) if (bAt[i]) loadNodes.push(i);
   const centre = sphere ? [0, meta.world.Rs, 0] : [0, 0, 0];
@@ -327,10 +366,9 @@ export function buildInfrastructure(layout) {
   const nearestNode = (P) => nodeHash.nearest(P, 40)[0];
   const cornerStart = siteCandidates.reduce((m, i) => (graph.nodes[i].pos[0] + graph.nodes[i].pos[2] - graph.nodes[i].pos[1] < graph.nodes[m].pos[0] + graph.nodes[m].pos[2] - graph.nodes[m].pos[1] ? i : m), siteCandidates[0]);
 
-  const terrainOn = !!(meta.terrain && meta.terrain.mode !== 'flat');
   const elev = Float64Array.from(graph.nodes, (n) => n.elev ?? 0);
   // pressure limits are pressures: the heads that give them scale as 1/g, like the tank height
-  const minHeadM = WATER.minHeadM / g, maxHeadM = WATER.maxHeadM / g;
+  const minHeadAt = (i) => WATER.minHeadM / headG(i), maxHeadAt = (i) => WATER.maxHeadM / headG(i);
   // bridges carry no trench: utilities avoid them where a ground route exists
   const trenchWeight = (e) => (e.bridge ? 4 * e.len : e.len);
 
@@ -363,8 +401,9 @@ export function buildInfrastructure(layout) {
       const p = parent[u], e = graph.edges[pedge[u]];
       const peak = avgFlow[u] * harmon(popUp[u]);
       let D = maxUpD[u] || SEWER.diameters[0];
-      for (const cand of SEWER.diameters) { if (cand < D) continue; D = cand; if (sewerCapacity(cand, sewerMinSlope(cand, g), g) >= peak) break; }
-      const slope = sewerMinSlope(D, g);
+      const gu = gOf(u); // the pipe answers to gravity where it starts
+      for (const cand of SEWER.diameters) { if (cand < D) continue; D = cand; if (sewerCapacity(cand, sewerMinSlope(cand, gu), gu) >= peak) break; }
+      const slope = sewerMinSlope(D, gu);
       const rise = elev[p] - elev[u]; // ground rises (+) or falls (−) toward the plant
       let upDepth = Math.max(SEWER.minCover, nodeDepth[u]);
       let lift = false, forceMain = false, pipeSlope = slope;
@@ -403,9 +442,9 @@ export function buildInfrastructure(layout) {
 
   // ---- water: elevated tanks per pressure zone, treatment plant at the perimeter, looped mains
   const water = (() => {
-    const towerHeightRaw = WATER.headM / g;
-    const pumped = towerHeightRaw > WATER.maxTowerHeight;
-    const towerHeight = Math.min(towerHeightRaw, WATER.maxTowerHeight);
+    // a tank stands as tall as the design pressure needs where it stands; past the limit its zone is pumped
+    const towerHeightAt = (i) => Math.min(WATER.headM / headG(i), WATER.maxTowerHeight);
+    const pumpedAt = (i) => WATER.headM / headG(i) > WATER.maxTowerHeight;
     const k = Math.max(1, Math.ceil(population / WATER.zonePopulation));
     const start = loadNodes.length ? loadNodes.reduce((m, i) => (dist(graph.nodes[i].pos, centre) < dist(graph.nodes[m].pos, centre) ? i : m), loadNodes[0]) : 0;
     // on terrain a tank moves to the highest ground near its site, so the zone below it is fed by gravity
@@ -425,16 +464,18 @@ export function buildInfrastructure(layout) {
     // built only as tall as its zone needs (the median customer still gets the design head)
     let tankHeight = [];
     const sizeTanks = () => {
-      tankHeight = towerNodes.map(() => towerHeight);
-      if (!terrainOn) return;
-      const zoneElevs = towerNodes.map(() => []);
-      for (const i of loadNodes) if (src[i] >= 0) zoneElevs[src[i]].push(elev[i]);
+      tankHeight = towerNodes.map((t) => towerHeightAt(t));
+      if (!zoned) return;
+      // zoneNeed: the grade line that gives every customer of the zone its minimum head (the highest customer's, on
+      // terrain; under wards the customer whose ward asks for the most head)
+      const zoneElevs = towerNodes.map(() => []), zoneNeed = towerNodes.map(() => -Infinity);
+      for (const i of loadNodes) if (src[i] >= 0) { zoneElevs[src[i]].push(elev[i]); zoneNeed[src[i]] = Math.max(zoneNeed[src[i]], minHeadAt(i) + elev[i]); }
       towerNodes.forEach((t, zi) => {
         const z = zoneElevs[zi].sort((a, b) => a - b); if (!z.length) return;
-        const median = z[z.length >> 1], top = z[z.length - 1];
+        const median = z[z.length >> 1], towerHeight = towerHeightAt(t);
         // the median customer gets the design head, and the highest customer still gets the minimum; a tank that would
         // have to stand taller than the design height to manage that is pumped (up to the tall-tank limit)
-        tankHeight[zi] = clamp(Math.max(towerHeight - (elev[t] - median), minHeadM + top - elev[t]), 10, Math.max(towerHeight, WATER.maxTowerHeight));
+        tankHeight[zi] = clamp(Math.max(towerHeight - (elev[t] - median), zoneNeed[zi] - elev[t]), terrainOn ? 10 : 0, Math.max(towerHeight, WATER.maxTowerHeight));
       });
     };
     sizeTanks();
@@ -443,26 +484,27 @@ export function buildInfrastructure(layout) {
     // below its tank that the head passes the limit, a valve resets the hydraulic grade line to the design head and
     // the nodes below it see that instead; a branch that climbs again out of a basin can still run short, which the
     // zone loop fixes with a tank of its own
-    const outletHead = Math.min(towerHeight, maxHeadM);
+    const outletAt = (i) => Math.min(towerHeightAt(i), maxHeadAt(i));
     const prvHeads = () => {
       const heads = new Float64Array(N), prvList = [];
-      for (let i = 0; i < N; i++) heads[i] = src[i] >= 0 ? staticHead(i) : towerHeight;
-      if (!terrainOn) return { heads, prvs: prvList };
+      for (let i = 0; i < N; i++) heads[i] = src[i] >= 0 ? staticHead(i) : towerHeightAt(i);
+      if (!zoned) return { heads, prvs: prvList };
       const kids = new Map();
       for (let i = 0; i < N; i++) if (parent[i] >= 0) (kids.get(parent[i]) ?? kids.set(parent[i], []).get(parent[i])).push(i);
-      // highest customer ground downstream of each node, so a valve's set point can be chosen to keep it served
-      const subTop = new Float64Array(N).fill(-Infinity);
-      for (const u of leavesFirst(d)) { subTop[u] = Math.max(subTop[u], bAt[u] ? elev[u] : -Infinity); if (parent[u] >= 0) subTop[parent[u]] = Math.max(subTop[parent[u]], subTop[u]); }
+      // the grade line the customers downstream of each node need (the highest one's ground plus its minimum head), so
+      // a valve's set point can be chosen to keep them served
+      const subNeed = new Float64Array(N).fill(-Infinity);
+      for (const u of leavesFirst(d)) { subNeed[u] = Math.max(subNeed[u], bAt[u] ? minHeadAt(u) + elev[u] : -Infinity); if (parent[u] >= 0) subNeed[parent[u]] = Math.max(subNeed[parent[u]], subNeed[u]); }
       for (const t of towerNodes) {
         const stack = [[t, Infinity]]; // [node, hydraulic grade line (absolute) after the last valve upstream]
         while (stack.length) {
           const [u, hgl] = stack.pop();
           let h = hgl;
           if (h !== Infinity) heads[u] = Math.min(heads[u], h - elev[u]);
-          if (heads[u] > maxHeadM + 1e-9) {
+          if (heads[u] > maxHeadAt(u) + 1e-9) {
             // set point: the design head, raised as far as the limit allows when the run climbs again below the valve
-            const need = Number.isFinite(subTop[u]) ? minHeadM + subTop[u] - elev[u] + 0.01 : 0;
-            const out = clamp(Math.max(outletHead, need), outletHead, maxHeadM);
+            const need = Number.isFinite(subNeed[u]) ? subNeed[u] - elev[u] + 0.01 : 0;
+            const outletHead = outletAt(u), out = clamp(Math.max(outletHead, need), outletHead, maxHeadAt(u));
             prvList.push({ node: u, pos: graph.nodes[u].pos, inletHeadM: heads[u], outletHeadM: out }); heads[u] = out; h = elev[u] + out;
           }
           for (const v of kids.get(u) ?? []) stack.push([v, h]);
@@ -485,12 +527,25 @@ export function buildInfrastructure(layout) {
       for (const i of loadNodes) { const z = src[i]; if (z >= 0 && d[i] > farD[z]) { farD[z] = d[i]; far[z] = i; } }
       const extra = [];
       for (let z = 0; z < towerNodes.length; z++) if (zp[z] > 2 * WATER.zonePopulation && farD[z] > 300) extra.push(highGround(far[z], towerNodes));
-      if (terrainOn) {
-        // ground too high for its tank: a new tank on the highest starved node serves the high zone
-        let hi = -1;
+      if (zoned) {
+        // ground too high for its tank (or a ward that asks for more head than its tank gives): a new tank on the
+        // highest starved node serves the high zone. Under wards a node no tank could serve is left to the check.
         const { heads } = prvHeads();
-        for (const i of loadNodes) if (heads[i] < minHeadM - 1e-6 && (hi < 0 || elev[i] > elev[hi])) hi = i;
-        if (hi >= 0) extra.push(hi); // a tank of its own at the highest starved customer: nothing else is sure to reach it
+        if (!headsVary) {
+          let hi = -1;
+          for (const i of loadNodes) if (heads[i] < minHeadAt(i) - 1e-6 && (hi < 0 || elev[i] > elev[hi])) hi = i;
+          if (hi >= 0) extra.push(hi); // a tank of its own at the highest starved customer: nothing else is sure to reach it
+        } else {
+          // under wards the starved customers sit in patches all over the plan: each zone with any gets a tank at its
+          // neediest one (highest grade line needed), so the patches are served in a few rounds rather than one by one
+          const worst = new Int32Array(towerNodes.length).fill(-1);
+          for (const i of loadNodes) {
+            if (pumpedAt(i) || heads[i] >= minHeadAt(i) - 1e-6 || src[i] < 0) continue; // a pumped ward's pumps make up the head
+            const z = src[i], w = worst[z];
+            if (w < 0 || minHeadAt(i) + elev[i] > minHeadAt(w) + elev[w]) worst[z] = i;
+          }
+          for (const i of worst) if (i >= 0) extra.push(i);
+        }
       }
       const fresh = [...new Set(extra)].filter((n) => !towerNodes.includes(n));
       if (!fresh.length) break;
@@ -537,12 +592,15 @@ export function buildInfrastructure(layout) {
       m.velocity = m.flow / (barrels * Math.PI * m.diameter * m.diameter / 4);
       mains.set(ei, m); trunkMains.push(m);
     }
-    const towers = towerNodes.map((n, zi) => ({ node: n, pos: graph.nodes[n].pos, elev: elev[n], height: tankHeight[zi], pumped: pumped || tankHeight[zi] > towerHeight + 1e-9, storageM3: zoneDemand[zi] * 86400, served: Math.round(zonePop[zi]), demandM3Day: zoneDemand[zi] * 86400 }));
+    const towers = towerNodes.map((n, zi) => ({ node: n, pos: graph.nodes[n].pos, elev: elev[n], height: tankHeight[zi], pumped: pumpedAt(n) || tankHeight[zi] > towerHeightAt(n) + 1e-9, storageM3: zoneDemand[zi] * 86400, served: Math.round(zonePop[zi]), demandM3Day: zoneDemand[zi] * 86400 }));
     // static head per node (m of water) with the pressure-reducing valves in place
     const { heads: nodeHeadM, prvs } = prvHeads();
     const nodeHead = new Float64Array(N);
-    for (const m of mains.values()) { nodeHead[m.a] = (1000 * G0 * g * nodeHeadM[m.a]) / 1e5; nodeHead[m.b] = (1000 * G0 * g * nodeHeadM[m.b]) / 1e5; } // bar, static
+    for (const m of mains.values()) { nodeHead[m.a] = (1000 * G0 * headG(m.a) * nodeHeadM[m.a]) / 1e5; nodeHead[m.b] = (1000 * G0 * headG(m.b) * nodeHeadM[m.b]) / 1e5; } // bar, static
     const plant = { node: plantNode, pos: graph.nodes[plantNode].pos, capacityM3Day: zoneDemand.reduce((s, x) => s + x, 0) * 86400 * WATER.maxDay };
+    // the design tank height: one figure for the world, the tallest where wards differ
+    const towerHeight = headsVary ? towerNodes.reduce((m, t) => Math.max(m, towerHeightAt(t)), 0) : towerHeightAt(0);
+    const pumped = headsVary ? towerNodes.some((t) => pumpedAt(t)) : pumpedAt(0);
     return { towers, plant, mains: [...mains.values()], nodeHead, nodeHeadM, prvs, towerHeight, pumped };
   })();
 
@@ -772,7 +830,7 @@ export function buildInfrastructure(layout) {
   const km = (arr, f = (x) => x.length) => arr.reduce((s, x) => s + f(x), 0) / 1000;
   const waterDemandM3Day = water.towers.reduce((s, t) => s + t.demandM3Day, 0);
   const maxSewerDepth = sewer.pipes.reduce((m, p) => Math.max(m, p.downDepth), 0);
-  const minSlopeRatio = sewer.pipes.filter((p) => !p.forceMain).reduce((m, p) => Math.min(m, p.slope / sewerMinSlope(p.diameter, g)), Infinity);
+  const minSlopeRatio = sewer.pipes.filter((p) => !p.forceMain).reduce((m, p) => Math.min(m, p.slope / sewerMinSlope(p.diameter, gOf(p.up))), Infinity);
   const maxVel = water.mains.reduce((m, x) => Math.max(m, x.velocity), 0);
   let minHead = Infinity, maxHead = -Infinity;
   for (const i of loadNodes) { minHead = Math.min(minHead, water.nodeHeadM[i]); maxHead = Math.max(maxHead, water.nodeHeadM[i]); }
@@ -801,17 +859,38 @@ export function buildInfrastructure(layout) {
   layout.infraMs = Date.now() - t0;
   const checks = [];
   const check = (id, label, value, status, basis) => checks.push({ id, label, value, status, basis });
+  // the gravity the networks were built for: the world's, a ward's over everything, or a range by ward
+  let gLabel = `${g} g`;
+  if (wg.on) { const gs = graph.nodes.map((_, i) => gOf(i)), lo = gs.reduce((a, b) => Math.min(a, b), Infinity), hi = gs.reduce((a, b) => Math.max(a, b), -Infinity); gLabel = lo === hi ? `${lo} g` : `${+lo.toFixed(3)} to ${+hi.toFixed(3)} g by ward`; }
   check('service', 'Buildings with water, sewer and power', `${laterals.length} of ${layout.buildings.length}`, laterals.length === layout.buildings.length ? 'pass' : 'fail', 'Each building connects to the nearest street node');
-  check('sewer-slope', 'Sewer slope vs. self-cleansing minimum', `${(minSlopeRatio * 100).toFixed(0)}% of minimum or more`, minSlopeRatio >= 1 - 1e-9 ? 'pass' : 'fail', `Ten-State slopes ÷ g (${g} g): 0.40 % at 200 mm on Earth`);
+  check('sewer-slope', 'Sewer slope vs. self-cleansing minimum', `${(minSlopeRatio * 100).toFixed(0)}% of minimum or more`, minSlopeRatio >= 1 - 1e-9 ? 'pass' : 'fail', `Ten-State slopes ÷ g (${gLabel}): 0.40 % at 200 mm on Earth`);
   check('sewer-depth', 'Deepest sewer', `${maxSewerDepth.toFixed(1)} m, ${sewer.liftStations.length} lift station${sewer.liftStations.length === 1 ? '' : 's'}${stats.forceMains ? `, ${stats.forceMains} force main${stats.forceMains === 1 ? '' : 's'}` : ''}`, maxSewerDepth <= SEWER.maxDepth + 1e-6 ? 'pass' : 'fail', `Runs deeper than ${SEWER.maxDepth} m get a lift station; runs too long for gravity are pumped`);
   check('water-velocity', 'Fastest water main', `${maxVel.toFixed(2)} m/s`, maxVel <= WATER.maxVelocity ? 'pass' : 'fail', 'Sized for 1.5 m/s at peak hour; 2.5 m/s limit');
   check('water-pressure', 'Tank height for 3.4 bar', `${water.towerHeight.toFixed(0)} m${water.pumped ? ' + pumps' : ''}`, water.pumped ? 'warn' : 'pass', 'h = P/(ρ g): the same pressure needs taller tanks at low gravity');
+  if (zoned) {
+    // pressures, not heads: under wards the same head is a different pressure from node to node
+    const zones = `${water.towers.length} zone${water.towers.length === 1 ? '' : 's'}, ${water.prvs.length} PRV${water.prvs.length === 1 ? '' : 's'}`;
+    if (!headsVary) {
+      const gh = headG(0), minHeadM = WATER.minHeadM / gh, maxHeadM = WATER.maxHeadM / gh, kPa = (h) => (G0 * gh * h).toFixed(0);
+      check('pressure-zones', 'Static pressure across the terrain', `${kPa(minHead)}–${kPa(maxHead)} kPa, ${zones}`,
+        minHead >= minHeadM - 1e-6 && maxHead <= maxHeadM + 1e-6 ? 'pass' : 'fail', `Tanks on the high ground; a zone splits below ${kPa(minHeadM)} kPa, a valve drops anything above ${kPa(maxHeadM)} kPa`);
+    } else {
+      let lo = Infinity, hi = -Infinity, out = 0;
+      // a node in a ward too light for any tank (one that needs more than the tallest tank) is pumped: its minimum is
+      // the pumps' to meet, as the water-pressure check says; its maximum still holds
+      const pumpedNode = (i) => WATER.headM / headG(i) > WATER.maxTowerHeight;
+      for (const i of loadNodes) {
+        const h = water.nodeHeadM[i], kPa = G0 * headG(i) * h;
+        lo = Math.min(lo, kPa); hi = Math.max(hi, kPa);
+        if ((h < minHeadAt(i) - 1e-6 && !pumpedNode(i)) || h > maxHeadAt(i) + 1e-6) out++;
+      }
+      check('pressure-zones', `Static pressure across the ${terrainOn ? 'terrain and the ' : ''}wards`, `${lo.toFixed(0)}–${hi.toFixed(0)} kPa, ${zones}${out ? `, ${out} node${out === 1 ? '' : 's'} outside the limits` : ''}`,
+        out ? 'fail' : 'pass', `Each node by its ward's gravity and pressure: a zone splits below ${(G0 * WATER.minHeadM).toFixed(0)} kPa, a valve drops anything above ${(G0 * WATER.maxHeadM).toFixed(0)} kPa`);
+    }
+  }
   if (terrainOn) {
-    const kPa = (h) => (G0 * g * h).toFixed(0);
-    check('pressure-zones', 'Static pressure across the terrain', `${kPa(minHead)}–${kPa(maxHead)} kPa, ${water.towers.length} zone${water.towers.length === 1 ? '' : 's'}, ${water.prvs.length} PRV${water.prvs.length === 1 ? '' : 's'}`,
-      minHead >= minHeadM - 1e-6 && maxHead <= maxHeadM + 1e-6 ? 'pass' : 'fail', `Tanks on the high ground; a zone splits below ${kPa(minHeadM)} kPa, a valve drops anything above ${kPa(maxHeadM)} kPa`);
     const gravityPipes = sewer.pipes.filter((p) => !p.forceMain);
-    const falling = gravityPipes.filter((p) => (elev[p.up] - p.upDepth) - (elev[p.down] - p.downDepth) >= sewerMinSlope(p.diameter, g) * p.length - 1e-6).length;
+    const falling = gravityPipes.filter((p) => (elev[p.up] - p.upDepth) - (elev[p.down] - p.downDepth) >= sewerMinSlope(p.diameter, gOf(p.up)) * p.length - 1e-6).length;
     check('sewer-gravity', 'Sewers falling on the heightfield', `${falling} of ${gravityPipes.length} gravity runs`, falling === gravityPipes.length ? 'pass' : 'fail', 'Invert out = invert in − slope × length, checked against ground elevation at both manholes');
   }
   check('grid-n1', 'Worst transmission corridor', `${(power.n1Transmission * 100).toFixed(0)} % of people stranded`,

@@ -1,5 +1,48 @@
 # Changelog
 
+## 1.7.0 — Phase 7a: wards (2026-11-22)
+
+Phase 7 is fantasy as mechanics (`docs/PHASE7-SPEC.md`). Stage 7a adds one profile key, `magic.wards`. The engine is
+1.7.0 from this stage on (sleeves' call, 2026-11-22; the spec had held the bump for 7e); later Phase 7 stages that
+change the contract bump the patch number, so the minor number keeps naming the phase. A profile without `magic`
+gives the 1.6.0 bytes apart from the version string: checked on six profiles (city, town and alien on hills, megastructure, chord, low-gravity
+megastructure on hills) for the city, its networks, `flows()` and a year of growth, and by the golden hashes.
+
+- **Wards.** `{ where, gravity, strength, pressure, height }`, multipliers on the world's gravity, the material's σ,
+  the water head rules and the heights the pattern asks for. `where`: `"all"`, `{ district }`, `{ at }`, `{ polarity }`.
+  Neutral wards resolve to nothing. Refused by name: a district in two wards, `"all"` beside another ward, effective
+  gravity outside 0.05–5 g, a point off the plate or in no district, a district the city does not have, an unknown
+  `where` or key. `magic.ley` and `magic.underworld` are refused as not built yet (stages 7b–7d), unless off;
+  `underworld: {}` and an underworld with every layer off are off (decision 2; Codex review on PR #4).
+- **Structure.** Inside a ward the limits are the world's formulas at the ward's values: `heightLimit(material, g·k_g)·k_σ`,
+  `slendernessLimit(base, g·k_g)`, and the terrace step (a terrace rises by its own ward's step above any neighbour).
+  `height` multiplies the requested height before any limit, in `generateCity` and in growth. `stats.heightLimit` and
+  `slendernessLimit` stay the world's. The `self-weight`, `slenderness` and `terrace` checks judge each building by
+  its own limit and report the one nearest (or furthest past) it.
+- **Report.** `building.ward`, `layout.wards[]` (districts, multipliers, limits, buildings, residents, `dependent`:
+  the buildings that break the world's own limits), `meta.magic.wards`, `stats.wards`, the `ward-dependence` info
+  check, and `impact(layout, infra, { kind: 'ward', index })`. Year frames recompute the report for what stands.
+- **Networks.** A street node takes the ward holding most of the floor area it serves (decision 6). Sewers take their
+  minimum slope and capacity from gravity at the pipe's upstream node; tanks their height from the tank's node; head
+  limits and pressures are per node; `flows()` likewise. `wardGravity(meta)` gives `gAt` and `headGAt`. Where a ward
+  covers part of the plan, the water builder sizes and splits zones by the customers they serve (as on terrain),
+  each starved zone gets a tank at its neediest customer per round, and a ward too light for any tank is pumped, as
+  the world would be; `pressure-zones` then judges every node by its own ward in kPa.
+- **CLI and tools.** The summary gains a `wards` line when a ward resolves: count, buildings, residents, dependent.
+  `query()` and the `query_city` tool take `fail: { kind: 'ward', index }`; the tool's schema lists it (Codex review on PR #4).
+- Measured (the spec's 7a table): megastructure, `"all"`, gravity 0.5: tallest 780 m (600 without), field for field the
+  half-gravity world; city: 134 lift stations (26) and 70 m tanks (35). Height 4 on the largest district (2,202
+  buildings): every building within the world's limits, none dependent; with gravity 0.5, 211 dependent (38,459
+  residents), tallest 272 m. Megastructure at 4 g with a strength-3 ward over everything: 324 dependent.
+- **Page bundle.** `wardGravity` is in the networks scope's export list, so `flows()` runs on the page (it threw
+  "wardGravity is not defined": every Node test passed, and the page test never calls `flows()`). New
+  `test/bundle.test.mjs` (in `test:fast`): every name a module imports from a scoped module is in that scope's list,
+  and the built page code runs generate, networks, flows, a ward impact and a year on a warded town. Both go red
+  without the fix.
+- Tests: `test/wards.test.mjs`, 11 tests (`npm run test:wards`, about 55 s). Mutation pass: 22 mutants, 21 killed. The
+  survivor lets a node's exact floor-area tie go to the ward instead of to no ward; no stock city has such a tie
+  (0 of 51 mixed nodes in the default city, 0 of 34 in the town).
+
 ## 1.6.0 — 2026-11-22
 
 Phase 6: exchange formats and time. Spec, decisions and what was built differently: `docs/PHASE6-SPEC.md`.

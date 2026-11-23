@@ -5,7 +5,7 @@ const infra = readFileSync(new URL('./src/infrastructure.js', import.meta.url), 
 const viewer = readFileSync(new URL('./src/viewer.html', import.meta.url), 'utf8');
 if (/<\/script/i.test(engine + infra + readFileSync(new URL('./src/simulation.js', import.meta.url), 'utf8') + readFileSync(new URL('./src/people.js', import.meta.url), 'utf8'))) throw new Error('sources must not contain a closing script tag');
 // The infrastructure module shares helper names with the engine, so it is wrapped in its own scope.
-const INFRA_EXPORTS = ['buildInfrastructure', 'buildStreetGraph', 'infraToOBJ', 'underground', 'foundationDepth', 'sewerMinSlope', 'dijkstra', 'SEWER', 'WATER', 'POWER', 'TRANSIT', 'UTILIDOR'];
+const INFRA_EXPORTS = ['buildInfrastructure', 'buildStreetGraph', 'infraToOBJ', 'underground', 'foundationDepth', 'sewerMinSlope', 'wardGravity', 'dijkstra', 'SEWER', 'WATER', 'POWER', 'TRANSIT', 'UTILIDOR'];
 // Deterministic math comes first: every stage calls DM.sin, DM.exp … so the page and Node agree to the bit.
 const detmath = readFileSync(new URL('./src/detmath.js', import.meta.url), 'utf8');
 if (/<\/script/i.test(detmath)) throw new Error('sources must not contain a closing script tag');

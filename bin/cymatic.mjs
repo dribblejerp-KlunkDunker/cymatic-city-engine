@@ -100,6 +100,8 @@ export function summarize(city, flags = {}) {
     stats: { buildings: s.buildings, population: s.population, jobs: s.jobs, districts: s.districts, tallestM: s.maxHeight, streetKm: r1(s.roadLengthKm), densityPerHa: r1(s.densityPerHa), greenPct: r1((s.greenShare ?? 0) * 100) },
     checks: { total: L.checks.length, notPassing: (flags.all ? L.checks : notPassing(L.checks)).map(({ id, status, value }) => ({ id, status, value })) },
   };
+  // wards: what the city holds only by magic (absent when no ward resolves)
+  if (s.wards) out.wards = { count: s.wards.count, buildings: s.wards.buildings, residents: s.wards.residents, dependent: s.wards.dependent, dependentResidents: s.wards.dependentResidents };
   if (flags.infra || flags.people) {
     const I = city.infra.stats;
     out.infra = { liftStations: I.liftStations, substations: I.substations, metroStations: I.stations, waterTanks: I.towers, excavationMm3: r1(I.excavationM3 / 1e6) };
@@ -122,6 +124,7 @@ function summaryText(S) {
     if (!c.notPassing.length) return `${label}: all ${c.total} pass`;
     return `${label}: ${c.notPassing.length}/${c.total} not passing\n` + c.notPassing.map((x) => `  ${x.status.padEnd(4)} ${x.id} = ${x.value}`).join('\n');
   };
+  if (S.wards) lines.push(`wards ${S.wards.count} · buildings ${fmt(S.wards.buildings)} · residents ${fmt(S.wards.residents)} · dependent ${fmt(S.wards.dependent)} (${fmt(S.wards.dependentResidents)} residents)`);
   lines.push(checkLine('checks', S.checks));
   if (S.infra) {
     const { checks, ...rest } = S.infra;
