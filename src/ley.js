@@ -16,6 +16,7 @@ export const LEY = {
   nexusStrength: 0.5, // a nexus is an antinode at this fraction of the plate's strongest |S| or more
   lineFactor: 2, // a line carries up to this many times its weaker end's output
   plantMargin: 1.25, // the shortfall plant is sized as the realistic one is: 25 % over the load it serves
+  maxNexuses: 1000, // the strongest this many are kept (stock cities have about 100); the cells re-tile the plate, so supply is unchanged
   n1Warn: 0.2, // as grid-n1: one loss may strand up to 20 % of the people
 };
 
@@ -106,6 +107,10 @@ export function findNexuses(spec, grid, dom, at) {
     found.push({ pos: P, sign: spec.field ? 1 : at(u, v).S >= 0 ? 1 : -1, strength: Math.sqrt(best / lmax) });
   }
   found.sort((a, b) => b.strength - a.strength || a.pos[0] - b.pos[0] || a.pos[2] - b.pos[2] || a.pos[1] - b.pos[1]);
+  // a foreign field of many tiny peaks could give thousands; the lines and the balance grow faster than the count,
+  // so only the strongest are kept and their cells take the rest of the plate's energy
+  const total = found.length;
+  if (found.length > LEY.maxNexuses) found.length = LEY.maxNexuses;
   // outputs: each distinct grid point's ℓ goes to its nearest nexus (ties to the lower index); a sphere weights by sin θ,
   // The quadrature is normalised to the plate's exact area.
   const cell = new Float64Array(found.length);
@@ -124,7 +129,7 @@ export function findNexuses(spec, grid, dom, at) {
   }
   const toMW = wsum > 0 ? (spec.flux * dom.area) / wsum / 1e6 : 0;
   const nexuses = found.map((x, m) => ({ ...x, outputMW: cell[m] * toMW }));
-  return { nexuses, supplyMW: nexuses.reduce((s, x) => s + x.outputMW, 0) };
+  return { nexuses, supplyMW: nexuses.reduce((s, x) => s + x.outputMW, 0), ...(total > found.length ? { found: total } : null) };
 }
 // ---------------------------------------------------------------- lines, taps and flow (in the network stage)
 const d2 = (a, b) => (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]);

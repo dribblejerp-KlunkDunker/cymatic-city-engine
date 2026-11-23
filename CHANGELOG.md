@@ -30,9 +30,16 @@ Stage 7b adds `magic.ley` (`docs/PHASE7-SPEC.md` decisions 8–13). New module `
   600 grid finds 74, and the count does not settle with resolution (220: 65, 330: 64, 440: 73, 660: 75) while supply
   moves 0.1 %. The misses are peaks sampled just under the cut or pairs closer than three grid cells. Kept the
   spec's grid-defined rule (decision 9); single-frequency cities miss nothing at any resolution.
+- **Codex review on PR #5, both verified and fixed.** (1) A plant on the same street node as a ley tap took the tap
+  down with it in `impact({ kind: 'plant' })`, and any single-plant city with the ley on was reported "the whole city
+  goes dark" (the megastructure: 1 substation and 1,009 MW are really lost). The tap now keeps its node live, and the
+  ley counts as a source in the wording. (2) A dense foreign field could give thousands of nexuses (9,387 from a
+  220 × 220 checkerboard: 112 s to build the networks); `LEY.maxNexuses` (1,000) keeps the strongest, the cells
+  re-tile the plate so supply is unchanged, and `meta.magic.ley.found` records how many there were (0.2 s).
+  Also "1 substation loses its only source" (was "lose their").
 - **Page.** `test/page.test.mjs` gains a warded town, a ley square and a ley sphere (Chromium = Node). `src/ley.js`
   is bundled in its own scope after the math; `test/bundle.test.mjs` checks its export list.
-- Tests: `test/ley.test.mjs`, 8 tests (`npm run test:ley`, about 40 s). Mutation pass: 22 mutants, 21 killed (two of them
+- Tests: `test/ley.test.mjs`, 9 tests (`npm run test:ley`, about 40 s). Mutation pass: 22 mutants, 21 killed (two of them
   by timeout: without the tie-break or the neighbour test thousands of grid points become nexuses and the Gabriel
   step, cubic in their number, does not finish). The survivor makes `ley-line-load` never fail; the balance respects
   capacity by construction, so no input reaches that branch: the check is a guard, recorded as unreachable.

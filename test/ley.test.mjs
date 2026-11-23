@@ -122,6 +122,12 @@ test('the measured spread: the town lives on its ley, the city just does, the me
   // the plant out: what the ley delivers keeps flowing
   const out = impact(mega, mega.infra, { kind: 'plant', index: 0 });
   assert.ok(Math.abs(out.shortfallMW - Math.max(0, mega.infra.power.peakMW - y.deliveredMW)) < 1e-6);
+  assert.doesNotMatch(out.summary, /whole city goes dark/);
+  assert.ok(out.affected.length < mega.buildings.length / 2, `${out.affected.length} of ${mega.buildings.length} buildings dark`);
+  // a plant on the same street node as a tap: the tap keeps that node live (Codex review on PR #5)
+  const sq = ley({ frequency: 540, plate: 'square' }), pl = sq.infra.power.plants[0];
+  assert.ok(sq.infra.ley.taps.some((t) => t.node === pl.node), 'the square city shares a node');
+  assert.match(impact(sq, sq.infra, { kind: 'plant', index: 0 }).summary, /^Power station out: 0 substations lose their only source/);
 });
 
 test('N-1 on the ley: losing the strongest nexus or the busiest line, what the plant cannot cover is stranded', () => {
@@ -151,6 +157,20 @@ test('a foreign field: constant ℓ gives equal flux per m², a single bump give
   assert.throws(() => generateCity({ ...CITY, magic: { ley: { flux: -1 } } }), /flux in W\/m² of 0 or more/);
   assert.throws(() => generateCity({ ...CITY, magic: { ley: { fluxx: 1 } } }), /unknown key "fluxx"/);
   assert.throws(() => generateCity({ ...CITY, magic: { underworld: { deeps: true } } }), /underworld is not built/);
+});
+
+test('a dense foreign field is capped at the strongest nexuses, and its supply is still the whole plate\'s', () => {
+  const W = 220, data = []; for (let j = 0; j < W; j++) for (let i = 0; i < W; i++) data.push(i % 2 === 0 && j % 2 === 0 ? 1 : 0);
+  const t = Date.now(), c = ley({ frequency: 432, preset: 'town', magic: { ley: { field: { width: W, height: W, data } } } });
+  const m = c.meta.magic.ley;
+  assert.equal(m.nexuses.length, LEY.maxNexuses); assert.ok(m.found > LEY.maxNexuses, `${m.found} found`);
+  for (let i = 1; i < m.nexuses.length; i++) assert.ok(m.nexuses[i - 1].strength >= m.nexuses[i].strength);
+  // the same field without the cap tiles the plate with more cells but the same energy
+  const keep = LEY.maxNexuses; LEY.maxNexuses = Infinity;
+  try { const all = generateCity({ frequency: 432, preset: 'town', magic: { ley: { field: { width: W, height: W, data } } } }).meta.magic.ley; assert.equal(all.nexuses.length, m.found); assert.ok(Math.abs(all.supplyMW - m.supplyMW) < 1e-6 * all.supplyMW); }
+  finally { LEY.maxNexuses = keep; }
+  assert.ok(Date.now() - t < 20000, `${Date.now() - t} ms`);
+  assert.ok(c.infra.ley.lines.length > 0);
 });
 
 test('the ley rides with the plan: a year of growth keeps its nexuses and rebalances its demand', () => {

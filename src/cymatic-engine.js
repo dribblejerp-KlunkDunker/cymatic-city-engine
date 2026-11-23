@@ -1599,7 +1599,7 @@ function symmetryNote(md) {
 function magicMeta(wardInfo, ley, found) {
   const out = {};
   if (wardInfo) out.wards = wardInfo.wards.map((w) => ({ where: w.where, districts: w.districts, gravity: w.gravity, strength: w.strength, pressure: w.pressure, height: w.height }));
-  if (ley) out.ley = { flux: ley.flux, nexusStrength: ley.nexusStrength, lineFactor: ley.lineFactor, field: ley.field ? 'grid' : 'plate', supplyMW: found.supplyMW, nexuses: found.nexuses };
+  if (ley) out.ley = { flux: ley.flux, nexusStrength: ley.nexusStrength, lineFactor: ley.lineFactor, field: ley.field ? 'grid' : 'plate', supplyMW: found.supplyMW, ...(found.found ? { found: found.found } : null), nexuses: found.nexuses };
   return Object.keys(out).length ? { magic: out } : null;
 }
 

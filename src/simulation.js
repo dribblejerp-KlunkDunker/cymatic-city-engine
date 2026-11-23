@@ -590,14 +590,16 @@ export function impact(layout, infra, asset) {
   // ---- power
   if (kind === 'plant') {
     const pl = infra.power.plants[index];
-    const lost = strandedSubstations(infra, new Set(), new Set([pl.node]));
+    // a ley tap on the plant's street node keeps feeding it, so only a node no tap uses goes dark with the plant
+    const tapNodes = new Set((infra.ley?.taps ?? []).map((t) => t.node));
+    const lost = strandedSubstations(infra, new Set(), tapNodes.has(pl.node) ? new Set() : new Set([pl.node]));
     const a = infra.laterals.filter((l) => lost.has(infra.power.nodeFeeder[l.node]));
     // with the ley on, what the nexuses deliver keeps flowing when the plant is out
     const remaining = infra.power.plants.filter((_, i) => i !== index).reduce((s, p) => s + p.capacityMW, 0) + (infra.ley?.deliveredMW ?? 0);
     const short = Math.max(0, infra.power.peakMW - remaining);
     return done(a, short > 0 ? infra.laterals.filter((l) => !lost.has(infra.power.nodeFeeder[l.node])) : [], { shortfallMW: short },
-      infra.power.plants.length > 1
-        ? `${pl.kind[0].toUpperCase()}${pl.kind.slice(1)} out: ${lost.size} substation${lost.size === 1 ? '' : 's'} lose their only source${short > 0 ? `; the rest run ${short.toFixed(0)} MW short at peak (rolling cuts)` : ''}.`
+      infra.power.plants.length > 1 || tapNodes.size
+        ? `${pl.kind[0].toUpperCase()}${pl.kind.slice(1)} out: ${lost.size} substation${lost.size === 1 ? ' loses its' : 's lose their'} only source${short > 0 ? `; the rest run ${short.toFixed(0)} MW short at peak (rolling cuts)` : ''}.`
         : `Power station out: the whole city goes dark (${Math.round(people(a)).toLocaleString('en-US')} people).`);
   }
   if (kind === 'substation') {
