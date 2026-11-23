@@ -7,7 +7,7 @@
 import { DM } from './detmath.js';
 import { resolveLey, findNexuses } from './ley.js';
 
-export const ENGINE_VERSION = '1.7.0';
+export const ENGINE_VERSION = '1.7.1';
 const TAU = Math.PI * 2;
 const G0 = 9.80665;
 

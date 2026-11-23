@@ -32,7 +32,10 @@ Stage 7b adds `magic.ley` (`docs/PHASE7-SPEC.md` decisions 8–13). New module `
   spec's grid-defined rule (decision 9); single-frequency cities miss nothing at any resolution.
 - **Page.** `test/page.test.mjs` gains a warded town, a ley square and a ley sphere (Chromium = Node). `src/ley.js`
   is bundled in its own scope after the math; `test/bundle.test.mjs` checks its export list.
-- Tests: `test/ley.test.mjs`, 8 tests (`npm run test:ley`, about 40 s). MUTATION_LINE
+- Tests: `test/ley.test.mjs`, 8 tests (`npm run test:ley`, about 40 s). Mutation pass: 22 mutants, 21 killed (two of them
+  by timeout: without the tie-break or the neighbour test thousands of grid points become nexuses and the Gabriel
+  step, cubic in their number, does not finish). The survivor makes `ley-line-load` never fail; the balance respects
+  capacity by construction, so no input reaches that branch: the check is a guard, recorded as unreachable.
 
 ## 1.7.0 — Phase 7a: wards (2026-11-22)
 

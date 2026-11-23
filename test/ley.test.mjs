@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { generateCity, fieldPreview, toJSON } from '../src/cymatic-engine.js';
 import { buildInfrastructure } from '../src/infrastructure.js';
 import { impact, cityAt } from '../src/simulation.js';
-import { LEY } from '../src/ley.js';
+import { LEY, gabriel } from '../src/ley.js';
 
 const CITY = { frequency: 432 }, LEYON = { ley: true };
 const cache = new Map();
@@ -94,6 +94,8 @@ test('lines are the Gabriel graph, by brute force', () => {
     assert.deepEqual(y.lines.map((l) => `${l.a}-${l.b}`), want);
     if (p === CITY) assert.equal(y.lines.length, 47);
   }
+  // the closed disc: a square keeps its four sides; the open disc would add both crossing diagonals
+  assert.deepEqual(gabriel([[0, 0, 0], [100, 0, 0], [100, 0, 100], [0, 0, 100]]).map((l) => `${l.a}-${l.b}`), ['0-1', '0-3', '1-2', '2-3']);
 });
 
 test('the measured spread: the town lives on its ley, the city just does, the megastructure keeps a plant', () => {
@@ -108,6 +110,13 @@ test('the measured spread: the town lives on its ley, the city just does, the me
   assert.ok(mega.infra.power.plants[0].capacityMW < city({ frequency: 432, preset: 'megastructure' }).infra.power.plants[0].capacityMW);
   const st = (x) => Object.fromEntries(x.infra.checks.map((k) => [k.id, k.status]));
   assert.equal(st(mega)['ley-supply'], 'warn'); assert.equal(st(c)['ley-supply'], 'pass'); assert.equal(st(town)['ley-supply'], 'pass');
+  // the taps feed the street transmission, as the plant does: they are its sources, and one dig strands no more than 20 %
+  for (const x of [town, c, mega]) {
+    const want = [...new Set([...x.infra.power.plants.map((q) => q.node), ...x.infra.ley.taps.map((t) => t.node)])];
+    assert.deepEqual(x.infra.power.sources, want);
+    assert.notEqual(x.infra.checks.find((k) => k.id === 'grid-n1').status, 'fail');
+    assert.ok(x.infra.power.n1Transmission <= 0.2 + 1e-9 || x.infra.power.substations.length < 3, `grid-n1 ${x.infra.power.n1Transmission}`);
+  }
   // every substation is fed: the taps and the plant together reach all of them
   for (const x of [town, c, mega]) assert.equal(x.infra.checks.find((k) => k.id === 'service').status, 'pass');
   // the plant out: what the ley delivers keeps flowing
