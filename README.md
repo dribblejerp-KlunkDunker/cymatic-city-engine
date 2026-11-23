@@ -234,6 +234,8 @@ The engine is one set of equations with two switches:
                         { "where": { "district": 1 }, "height": 4, "strength": 2 } ] } }
 ```
 
+**Ley** (`magic.ley`, Phase 7b) makes the plate's own vibration a power source. ℓ = S², the energy of the field the streets are the zero lines of; **nexuses** sit at its antinodes (local maxima of |S| at half the plate's strength or more, on the engine's sample grid, refined by one quadratic fit); each gives `flux` × ∫ℓ dA over its cell, the part of the plate nearer to it than to any other (600 W/m² by default). **Lines** join them as a Gabriel graph, each carrying up to twice its weaker end's output. Every substation taps its nearest nexus, the lines balance supply and demand within capacity, and the power station is built only for what the ley cannot deliver (×1.25), not at all when it is zero; the taps feed the street transmission as the station does. `ley: true` takes the defaults; `{ flux, nexusStrength, lineFactor, field }` overrides them, where `field: { width, height, data }` replaces ℓ with a foreign grid mapped onto the plate as a terrain heightmap is. `flux: 0` gives the realistic grid byte for byte. Checks `ley-supply` (warns below 1× peak with the margin; the plant covers it), `ley-line-load` and `ley-n1`. Measured: the 432 Hz town has 5.1× its peak, the default city 1.39× (no plant), the megastructure 0.16× (a 1,300 MW reactor instead of 1,550).
+
 **Themes** rename and recolour without touching the engineering: *Realistic*, *High fantasy* (aqueducts, ley lines, deep roads, dwarven galleries…), *Alien hive* (nutrient veins, bioelectric lines, burrow ways…) and *Solarpunk*.
 
 ## Profiles
@@ -275,6 +277,7 @@ A city in time needs one more number. Growth is paced to finish the plan at the 
 | `buildInfrastructure(layout)` | Build every network for a layout; returns `{ graph, laterals, sewer, water, power, transit, utilidors, stats, checks }` and attaches the OBJ hook. On terrain, `graph.nodes[i].elev`, `sewer.pipes[].slope` (the invert fall), `water.towers[].elev/height/pumped`, `water.prvs[]`, `water.nodeHeadM[]`. |
 | `buildStreetGraph(layout)` | The street graph alone. |
 | `sewerMinSlope(D, g)`, `foundationDepth(b)`, `underground(layout, P, depth)`, `infraToOBJ` | Rules and helpers. |
+| `buildLey(layout, { substations, powerFactor, nearestNode })`, `findNexuses(spec, grid, dom, at)`, `gabriel(points)`, `resolveLey`, `leyPlantMW`, `LEY` (`src/ley.js`) | The ley: nexuses from the field (in `generateCity`), then lines, taps, the balance over capacity and N-1 (in the network stage). `LEY` holds the tunable defaults: flux 600 W/m², nexusStrength 0.5, lineFactor 2. |
 | `wardGravity(meta)` | `{ g, on, gAt(node), headGAt(node) }`: the gravity at a street node, and the gravity its water head rules see (a ward's gravity ÷ its `pressure`). |
 | `SEWER`, `WATER`, `POWER`, `TRANSIT`, `UTILIDOR` | Design constants with their sources in the comments. |
 
@@ -329,7 +332,8 @@ A city in time needs one more number. Growth is paced to finish the plan at the 
 layout
 ├─ meta        frequency, note, plate, preset, base, arcology, presetLabel, presetSpec?, seed, Q, gravity, material, materialSpec,
 │              enforce, inverse, modes[], dominant, symmetry, sharpness, world{shape, extent, area, Rs}, ringLevels, …,
-│              magic?{ wards[{where, districts[], gravity, strength, pressure, height}] }   (only when a ward resolves)
+│              magic?{ wards[{where, districts[], gravity, strength, pressure, height}],     (only what resolves)
+│                      ley{ flux, nexusStrength, lineFactor, field: plate|grid, supplyMW, nexuses[{pos, sign, strength, outputMW}] } }
 ├─ roads[]     { a:[x,y,z], b:[x,y,z], w, kind: boulevard|ring|spoke|wall }
 ├─ buildings[] { pos, up, fwd, w, d, h, floors, zone, shape, polarity, amp, district, landmark, ward? }
 ├─ wards[]?    { where, districts[], gravity, strength, pressure, height, effectiveGravity, heightLimit, slendernessLimit,
@@ -341,6 +345,8 @@ layout
 ├─ checks[]    { id, label, value, status: pass|warn|fail|info, basis }
 └─ infra
    ├─ graph     { nodes[{pos, deg, ward?}], edges[{a, b, len, kind, w}], connectors }
+   ├─ ley?      { flux, nexuses[{pos, sign, strength, outputMW, demandMW, node}], lines[{a, b, length, capacityMW, loadMW, flowMW}],
+   │              taps[{nexus, substation, node, MW}], supplyMW, demandMW, deliveredMW, undeliveredMW, plantMW, n1{kind, index, share} }
    ├─ laterals[] { building, node, length, residents, jobs }
    ├─ sewer     { plants[], pipes[{up, down, edge, length, diameter, slope, upDepth, downDepth, flow, avgFlow, lift, forceMain, plant}],
    │             liftStations[], manholes[], nodeDepth[] }

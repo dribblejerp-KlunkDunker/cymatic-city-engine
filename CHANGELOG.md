@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.7.1 — Phase 7b: ley (2026-11-23)
+
+Stage 7b adds `magic.ley` (`docs/PHASE7-SPEC.md` decisions 8–13). New module `src/ley.js`. A profile without
+`magic.ley` gives the bytes it gave before (checked on six profiles apart from the version, and by the golden hashes).
+
+- **Nexuses** (in `generateCity`, from the field alone): local maxima of |S| on the engine's sample grid at
+  `nexusStrength` (0.5) of the plate's strongest or more, one quadratic fit per axis, positions to 1 cm, ordered by
+  strength then position. Each gives `flux` × ∫S² dA over its nearest-nexus cell (trapezoid weights at the grid's
+  edge, sin θ on a sphere, normalised to the plate's exact area). They ride in `meta.magic.ley`, so year frames and
+  JSON round trips keep them. `field: { width, height, data }` replaces S² with a foreign grid.
+- **Lines, taps, balance** (in the network stage, `buildLey`): the Gabriel graph of the nexuses (closed disc, so a
+  square of nexuses keeps its sides, not crossing diagonals), capacity `lineFactor` × the weaker end. Each
+  substation taps its nearest nexus; deficits, largest first, draw from the nearest surplus along lines with room
+  left. What cannot be delivered is `undeliveredMW`; the plant is built for it × 1.25 (to 50 MW), none when it is
+  zero, and no intertie once the ley feeds anything. The tap nodes join the plant as transmission sources.
+  `flux: 0` gives the realistic `infra.power` byte for byte.
+- **Out:** `infra.ley { flux, nexuses[{ pos, sign, strength, outputMW, demandMW, node }], lines[{ a, b, length,
+  capacityMW, loadMW, flowMW }], taps[{ nexus, substation, node, MW }], supplyMW, demandMW, deliveredMW,
+  undeliveredMW, plantMW, n1 }`, `infra.stats.ley`. Checks `ley-supply` (warn below 1, never fail), `ley-line-load`
+  (fail above 1), `ley-n1` (strongest nexus or busiest line lost; warn above 20 %). `impact({ kind: 'plant' })`
+  counts what the ley still delivers.
+- **Measured** (supply ÷ peak demand): town 432 Hz 5.08× (no plant), default city 1.39× (no plant; 36 nexuses, 47
+  lines, busiest line at 90 %), 300 Hz 1.45× (12 nexuses), megastructure 0.16× (a 1,300 MW core reactor for 1,010 MW
+  undelivered, instead of 1,550 MW), alien 6.30×, chord 432 + 540 1.35× (65 nexuses, 110 lines, 18 MW undelivered
+  behind full lines: a 50 MW plant), square 540 Hz 2.32×, sphere 432 Hz 1.82×.
+- **Spec differences, measured.** The default city has 47 Gabriel lines, not the prototype's 49: the open and closed
+  disc rules agree on 47, so the difference is the refined positions. The chord city has 65 nexuses, not 60; a 600 ×
+  600 grid finds 74, and the count does not settle with resolution (220: 65, 330: 64, 440: 73, 660: 75) while supply
+  moves 0.1 %. The misses are peaks sampled just under the cut or pairs closer than three grid cells. Kept the
+  spec's grid-defined rule (decision 9); single-frequency cities miss nothing at any resolution.
+- **Page.** `test/page.test.mjs` gains a warded town, a ley square and a ley sphere (Chromium = Node). `src/ley.js`
+  is bundled in its own scope after the math; `test/bundle.test.mjs` checks its export list.
+- Tests: `test/ley.test.mjs`, 8 tests (`npm run test:ley`, about 40 s). MUTATION_LINE
+
 ## 1.7.0 — Phase 7a: wards (2026-11-22)
 
 Phase 7 is fantasy as mechanics (`docs/PHASE7-SPEC.md`). Stage 7a adds one profile key, `magic.wards`. The engine is
