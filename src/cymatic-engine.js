@@ -6,7 +6,7 @@
 
 import { DM } from './detmath.js';
 
-export const ENGINE_VERSION = '1.6.0';
+export const ENGINE_VERSION = '1.7.0';
 const TAU = Math.PI * 2;
 const G0 = 9.80665;
 
@@ -454,8 +454,10 @@ function resolveMagic(m, gravity) {
   if (typeof m !== 'object' || Array.isArray(m)) throw new Error('magic must be an object: { wards: [ … ] }');
   for (const k of Object.keys(m)) {
     if (k === 'wards') continue;
-    if ((k === 'ley' || k === 'underworld') && (m[k] == null || m[k] === false)) continue;
-    throw new Error(k === 'ley' || k === 'underworld' ? `magic.${k} is not built in engine ${ENGINE_VERSION} (wards only so far)` : `Unknown magic key "${k}" (wards, ley, underworld)`);
+    // off is nothing: `ley: false`, and an `underworld` that is false or has every layer off (`{}` included)
+    const v = m[k], off = v == null || v === false || (k === 'underworld' && typeof v === 'object' && !Array.isArray(v) && Object.values(v).every((x) => x == null || x === false));
+    if ((k === 'ley' || k === 'underworld') && off) continue;
+    throw new Error(k === 'ley' || k === 'underworld' ? `magic.${k} is not built in engine ${ENGINE_VERSION} (wards only so far; it comes with Phase 7 stage ${k === 'ley' ? '7b' : '7c'})` : `Unknown magic key "${k}" (wards, ley, underworld)`);
   }
   const wards = [];
   if (m.wards != null) {

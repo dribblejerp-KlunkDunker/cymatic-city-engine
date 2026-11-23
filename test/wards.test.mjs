@@ -6,6 +6,7 @@ import { generateCity, toJSON, heightLimit, slendernessLimit } from '../src/cyma
 import { buildInfrastructure, sewerMinSlope } from '../src/infrastructure.js';
 import { impact, flows, cityAt } from '../src/simulation.js';
 import { run } from '../bin/cymatic.mjs';
+import { agentTools } from '../src/query.js';
 
 const CITY = { frequency: 432 }, MEGA = { frequency: 432, preset: 'megastructure' };
 const cache = new Map();
@@ -26,7 +27,7 @@ const slim = (b) => (b.shape === 'dome' || b.shape === 'terrace' ? 0 : b.h / Mat
 
 test('neutral is nothing: wards of 1 × 1 × 1 give the bytes of the profile without them', () => {
   const base = generateCity(CITY); base.infra = buildInfrastructure(base);
-  for (const magic of [{}, { wards: [] }, { wards: [{ where: 'all' }] }, { wards: [{ where: { district: 1 }, gravity: 1, strength: 1, pressure: 1, height: 1 }, { where: { polarity: -1 } }] }, { ley: false, underworld: null }]) {
+  for (const magic of [{}, { wards: [] }, { wards: [{ where: 'all' }] }, { wards: [{ where: { district: 1 }, gravity: 1, strength: 1, pressure: 1, height: 1 }, { where: { polarity: -1 } }] }, { ley: false, underworld: null }, { underworld: {} }, { underworld: { catacombs: false, deeps: false } }]) {
     const c = generateCity({ ...CITY, magic }); c.infra = buildInfrastructure(c);
     assert.equal(c.wards, undefined); assert.equal(c.meta.magic, undefined);
     assert.ok(toJSON(c) === toJSON(base), `magic ${JSON.stringify(magic)} changed the city or its networks`);
@@ -174,7 +175,8 @@ test('refusals: each names what is wrong', () => {
   refuse({ wards: [{ where: 'all', gravity: 0.5 }, { where: { district: 0 }, strength: 2 }] }, /covers everything/);
   refuse({ wards: [{ where: 'all', gravity: -1 }] }, /gravity must be a multiplier above 0/);
   refuse({ wards: [{ where: 'all', gravty: 0.5 }] }, /unknown key "gravty"/);
-  refuse({ ley: true }, /magic\.ley is not built/);
+  refuse({ ley: true }, /magic\.ley is not built.*stage 7b/);
+  refuse({ underworld: { catacombs: true } }, /magic\.underworld is not built.*stage 7c/);
   refuse({ wardz: [] }, /Unknown magic key "wardz"/);
   refuse([1], /magic must be an object/);
 });
@@ -245,4 +247,15 @@ test('the command line takes magic from a profile and says what depends on it', 
   assert.match(text.join('\n'), /^wards 1 · buildings 2,202 · residents [\d,]+ · dependent 211 \([\d,]+ residents\)$/m);
   const plainText = []; run([JSON.stringify(CITY)], { log: (x) => plainText.push(x) });
   assert.doesNotMatch(plainText.join('\n'), /wards/);
+});
+
+test('the query tool can fail a ward: its schema lists the kind, and the answer is the ward\'s dependents', () => {
+  const tool = agentTools().find((t) => t.name === 'query_city');
+  assert.ok(tool.input_schema.properties.fail.properties.kind.enum.includes('ward'));
+  const prof = { ...CITY, magic: { wards: [{ where: { district: largestDistrict(city(CITY)) }, height: 4, gravity: 0.5 }] } };
+  const state = {};
+  agentTools().find((t) => t.name === 'generate_city').run({ profile: prof }, state);
+  const r = tool.run({ from: 'buildings', fail: { kind: 'ward', index: 0 }, where: [{ field: 'status', op: '=', value: 'lost' }], aggregate: { n: 'count' } }, state);
+  const out = typeof r === 'string' ? JSON.parse(r) : r;
+  assert.equal(JSON.stringify(out).includes('"n":211'), true, JSON.stringify(out).slice(0, 300));
 });
