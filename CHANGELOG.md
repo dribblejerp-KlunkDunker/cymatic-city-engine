@@ -34,6 +34,11 @@ megastructure on hills) for the city, its networks, `flows()` and a year of grow
   half-gravity world; city: 134 lift stations (26) and 70 m tanks (35). Height 4 on the largest district (2,202
   buildings): every building within the world's limits, none dependent; with gravity 0.5, 211 dependent (38,459
   residents), tallest 272 m. Megastructure at 4 g with a strength-3 ward over everything: 324 dependent.
+- **Page bundle.** `wardGravity` is in the networks scope's export list, so `flows()` runs on the page (it threw
+  "wardGravity is not defined": every Node test passed, and the page test never calls `flows()`). New
+  `test/bundle.test.mjs` (in `test:fast`): every name a module imports from a scoped module is in that scope's list,
+  and the built page code runs generate, networks, flows, a ward impact and a year on a warded town. Both go red
+  without the fix.
 - Tests: `test/wards.test.mjs`, 11 tests (`npm run test:wards`, about 55 s). Mutation pass: 22 mutants, 21 killed. The
   survivor lets a node's exact floor-area tie go to the ward instead of to no ward; no stock city has such a tie
   (0 of 51 mixed nodes in the default city, 0 of 34 in the town).
